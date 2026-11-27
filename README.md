@@ -7,7 +7,7 @@ Eine Web-App (PWA), die du auf Android wie eine normale App installierst:
 3. **Entzerren** – perspektivisch gerade gerichtet und auf A4 gebracht (einstellbar: immer A4 / automatisch / Originalproportion)
 4. **Auto-Filter** – erkennt Farbe; reine Textseiten → Schwarz-Weiß, farbige → Farbe. Der Hintergrund wird jeweils herausgerechnet, damit das Papier reinweiß ist und kein Grauschleier bleibt. Manuell: Farbe, Graustufen, S/W, Original
 5. **Texterkennung** (Tesseract, Deutsch + Englisch, läuft auf dem Handy)
-6. **Analyse** – Datum, Dokumentart, Absender, Betreff und Themenordner per Regeln (lernt aus deinen Korrekturen) und optional per **KI über GitHub Models**: Die App schickt nur gekürzten, geschwärzten Text an deine eigene Azure-Funktion (`relay/`), die ihn an GitHub Models weiterreicht
+6. **Analyse** – Datum, Dokumentart, Absender, Betreff und Themenordner per Regeln (lernt aus deinen Korrekturen) und optional per **KI über Azure OpenAI**: Die App schickt nur gekürzten, geschwärzten Text an deine eigene Azure-Funktion (`relay/`), die ihn an GitHub Models weiterreicht
 7. **Papierformat** – Seitenverhältnis wird aus der Perspektive berechnet, die Größe (A4, A5, A6, Letter, DIN lang …) über die Schriftgröße geschätzt; im Ablegen-Schritt änderbar
 8. **PDF** – durchsuchbar (unsichtbare Textebene), Name z. B. `2026-11-03_Rechnung_Telekom_Mobilfunk-November.pdf`
 9. **Ablage** – lokal in der App und automatisch in OneDrive unter `Scans/<Ordner>/`
@@ -66,7 +66,7 @@ Einstellungen → **Protokoll** zeigt, was die App zuletzt getan hat (inkl. Fehl
 ## Grenzen, die du kennen solltest
 
 - **Anmeldung:** Microsoft lässt reine Web-Apps (SPA) nur 24 Stunden ohne erneute Anmeldung zu. Danach erscheint ein Hinweis *Neu verbinden*. Ein Tipp genügt; meist ist kein Passwort nötig, weil Chrome eingeloggt bleibt. Bis dahin werden Scans lokal gesammelt.
-- **KI:** braucht Netz, die Azure-Funktion und einen GitHub-Token mit „Models: read“ (liegt nur in Azure). Kostenloses Kontingent von GitHub Models; ohne Netz oder bei Fehlern greifen die Regeln.
+- **KI:** braucht Netz, die Azure-Funktion und eine eigene Azure-OpenAI-Ressource in Schweden (EU). Die Funktion meldet sich per verwalteter Identität an – es gibt keinen Schlüssel. Kosten: Bruchteile eines Cents pro Scan. Ohne Netz oder bei Fehlern greifen die Regeln. (GitHub Models wurde am 30.07.2026 abgeschaltet.)
 - **Analyse ohne KI:** Die Zuordnung beruht auf Stichwörtern, einer Liste bekannter Absender (Telekom, Sparkasse, AOK, Finanzamt …) und Firmenendungen (GmbH, AG …). Bei ungewöhnlichen Dokumenten landet ein Scan in „Sonstiges“ oder bekommt einen falschen Absender. Das korrigierst du im Ablegen-Schritt; die Korrektur wird gelernt.
 - **Bilderkennung:** Auf dem Gerät erkennt die App, ob eine Seite farbige Inhalte (Fotos, Logos, Stempel) hat, und wählt danach den Filter. Logos oder Bildinhalte erkennt sie nicht.
 - **Handschrift** erkennt Tesseract kaum.
@@ -78,7 +78,7 @@ Einstellungen → **Protokoll** zeigt, was die App zuletzt getan hat (inkl. Fehl
 |---|---|
 | `index.html` | Die komplette App (Oberfläche, Bildverarbeitung, Analyse, PDF, OneDrive) |
 | `cv-worker.js` | Bildverarbeitung (OpenCV) im Hintergrund-Thread |
-| `relay/` | Azure-Funktion: prüft dein Microsoft-Konto und leitet an GitHub Models weiter (`relay.zip` = Paket für WEBSITE_RUN_FROM_PACKAGE) |
+| `relay/` | Azure-Funktion: prüft dein Microsoft-Konto und leitet an Azure OpenAI weiter (Einstellungen: ALLOWED_USERS, AOAI_ENDPOINT, AOAI_DEPLOYMENT; verwaltete Identität mit Rolle „Cognitive Services OpenAI User“) (`relay.zip` = Paket für WEBSITE_RUN_FROM_PACKAGE) |
 | `sw.js` | Offline-Cache für App und Bibliotheken |
 | `manifest.webmanifest`, `icon*` | Installierbarkeit als Android-App |
 

@@ -270,15 +270,15 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     <input type="range" id="sQual" min="0.5" max="0.95" step="0.05" style="padding:0">
 
     <h2>KI-Analyse</h2>
-    <label class="chk"><input type="checkbox" id="sAi"> KI ordnet ein und benennt (über GitHub Models)</label>
-    <label for="sAiModel">Modell</label>
-    <select id="sAiModel"></select>
+    <label class="chk"><input type="checkbox" id="sAi"> KI ordnet ein und benennt (über Azure OpenAI)</label>
+    <label for="sAiModel" hidden>Modell</label>
+    <select id="sAiModel" hidden></select>
     <label for="sAiUrl">Adresse deiner Azure-Funktion</label>
     <input id="sAiUrl" placeholder="https://….azurewebsites.net/api/analyze" autocomplete="off" spellcheck="false">
     <label class="chk"><input type="checkbox" id="sRedact"> Persönliches vor dem Senden schwärzen (Empfänger, IBAN, Nummern, Kontakt)</label>
     <label for="sRedactNames">Weitere Namen schwärzen (z. B. Familienmitglieder, mit Komma getrennt)</label>
     <input id="sRedactNames" autocomplete="off">
-    <p class="hint">Gesendet wird nur der gekürzte, geschwärzte Text – kein Bild. Er geht über deine eigene Azure-Funktion an GitHub Models (Microsoft) und wird dort laut GitHub nicht zum Training genutzt. Ohne Netz oder bei Fehlern nimmt die App die Regeln.</p>
+    <p class="hint">Gesendet wird nur der gekürzte, geschwärzte Text – kein Bild. Er geht über deine eigene Azure-Funktion an dein eigenes Azure-OpenAI-Modell in Schweden (EU); Microsoft nutzt ihn laut eigener Zusage nicht zum Training und speichert ihn nicht dauerhaft. Ohne Netz oder bei Fehlern nimmt die App die Regeln.</p>
     <p id="sAiInfo" class="mute" style="font-size:14px;margin:8px 0 0;overflow-wrap:anywhere"></p>
     <div class="row"><button id="sAiTest">Verbindung testen</button><button id="sAiPreview">Was sieht die KI?</button></div>
 
@@ -344,7 +344,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27s';
+const VERSION='2026-11-27t';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -733,7 +733,7 @@ function pageMM(p){
   const land=p.out.width>p.out.height;return land?[f.h,f.w]:[f.w,f.h];
 }
 
-/* ---------- KI-Analyse über GitHub Models (Weiterleitung über deine Azure-Funktion) ---------- */
+/* ---------- KI-Analyse über Azure OpenAI (Weiterleitung über deine Azure-Funktion) ---------- */
 const AI_MODELS={'openai/gpt-4o-mini':'GPT-4o mini (empfohlen)','openai/gpt-4.1-mini':'GPT-4.1 mini (genauer)','openai/gpt-4.1-nano':'GPT-4.1 nano (am schnellsten)'};
 function folderList(){const set=new Set(parseCats(cfg.cats).map(c=>c.name));Object.values(learn).forEach(f=>set.add(f));(cfg.extraFolders||[]).forEach(f=>set.add(f));set.add('Sonstiges');return[...set]}
 // Vor dem Senden schwärzen: Empfängerblock, Namen, IBAN/BIC, Kontakt- und lange Nummern, Geburtsdaten
