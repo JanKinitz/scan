@@ -68,10 +68,12 @@ h2{font-size:18px;margin:30px 0 4px}
 #cropBox,#pgView{flex:1;position:relative;min-height:300px;touch-action:none;overflow:hidden}
 #vCrop,#vPages{height:100dvh}
 #cropCv{position:absolute;inset:0;width:100%;height:100%}
-#pgView{display:grid;place-items:center;padding:12px;touch-action:auto}
-#pgView canvas{max-width:100%;max-height:calc(100dvh - 300px);box-shadow:0 8px 30px #0008;background:#fff}
+#pgView{touch-action:auto}
+#pgView canvas{position:absolute;inset:12px;width:calc(100% - 24px);height:calc(100% - 24px);object-fit:contain;filter:drop-shadow(0 8px 20px #0009)}
 .foot{display:flex;gap:10px;padding:12px 16px 16px}.foot .pri{flex:1}
-.modes{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;padding:4px 12px}
+.modes{display:flex;gap:6px;overflow-x:auto;padding:4px 12px;scrollbar-width:none}
+.modes button{flex:none}
+.modes::before,.modes::after{content:'';margin:auto}
 .modes button{min-height:38px;border-radius:99px;font-size:14px;padding:0 13px}
 .modes button[aria-pressed=true]{background:#fff;color:#111;border-color:#fff}
 .modes .auto-hint{font-size:11px;opacity:.7;margin-left:4px}
@@ -327,10 +329,10 @@ Auto: fahrzeug, kfz, kennzeichen, tüv, hauptuntersuchung, werkstatt, inspektion
 Schule und Kita: schule, kita, kindergarten, klasse, klassenlehrerin, elternbrief, liebe eltern, zeugnis, schuljahr, elternabend, hort, ausflug
 Kaufbelege und Garantie: kassenbon, quittung, garantie, gewährleistung, bestellung, lieferschein, kaufbeleg, bestellnummer, artikelnummer, retoure`;
 
-const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{absender}_{betreff}',dateSrc:'doc',cats:DEFAULT_CATS,ai:false,aiModel:'std'};
+const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{betreff}_{absender}',dateSrc:'doc',cats:DEFAULT_CATS,ai:false,aiModel:'std'};
 const load=(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v??d}catch{return d}};
 const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};
-let cfg={...DEF,...load('cfg',{})};if(!cfg.clientId)cfg.clientId=DEF.clientId;if(cfg.pattern==='{datum}_{typ}_{absender}')cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';
+let cfg={...DEF,...load('cfg',{})};if(!cfg.clientId)cfg.clientId=DEF.clientId;if(['{datum}_{typ}_{absender}','{datum}_{typ}_{absender}_{betreff}'].includes(cfg.pattern))cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';
 let learn=load('learn',{});   // absender-schlüssel -> ordner
 let tok=load('tok',{});
 
@@ -340,7 +342,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27g';
+const VERSION='2026-11-27h';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -486,9 +488,13 @@ function findDate(text){
   const cands=[],now=new Date(),max=new Date(now.getTime()+60*864e5),min=new Date(1990,0,1),L=text.toLowerCase();
   const add=(y,m,d,idx)=>{if(y<100)y+=y>50?1900:2000;const dt=new Date(y,m-1,d);if(dt.getMonth()!==m-1||dt<min||dt>max)return;
     const before=L.slice(Math.max(0,idx-40),idx);let s=0;
-    if(/(datum|vom|ausgestellt|erstellt|stand|den|date)\W{0,6}$/.test(before))s+=4;
+    const lineStart=L.lastIndexOf('\n',idx)+1,lineEnd=(L.indexOf('\n',idx)+1||L.length+1)-1,line=L.slice(lineStart,lineEnd).trim();
+    if(line.length<=40&&/^([a-zäöüß .\-]+,\s*(den\s*)?)?[\d.\s]+$|^[a-zäöüß .\-]+,\s*(den\s*)?\d/.test(line))s+=5; // Datum allein in der Zeile / „Ort, den …“ (Briefkopf)
+    if(/(datum|ausgestellt|erstellt|stand|den|date)\W{0,6}$/.test(before))s+=4;
+    if(/(rechnung|schreiben|brief|bescheid|mitteilung) vom\W{0,6}$/.test(before))s+=4;
     if(/(rechnungsdatum|belegdatum|bescheiddatum|druckdatum)/.test(before))s+=3;
-    if(/(geb|geboren|geburt|gültig bis|fällig|zahlbar bis|bis zum|leistungszeitraum|zeitraum)/.test(before))s-=4;
+    if(/(geb|geboren|geburt|gültig bis|fällig|zahlbar bis|bis zum|leistungszeitraum|zeitraum|verordnung|behandlung|termin|lieferdatum)/.test(before))s-=4;
+    if(/;\s*$/.test(before)||/^\s*;/.test(L.slice(idx+8,idx+12)))s-=2; // Datumslisten (Termine)
     s+=Math.max(0,2-idx/1500);
     cands.push({iso:`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,s,idx})};
   let m;const r1=/(?<!\d)(\d{1,2})\.\s?(\d{1,2})\.\s?(\d{4}|\d{2})(?!\d)/g;while((m=r1.exec(text)))add(+m[3],+m[2],+m[1],m.index);
@@ -497,6 +503,26 @@ function findDate(text){
   const r3=/(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)/g;while((m=r3.exec(text)))add(+m[1],+m[2],+m[3],m.index);
   cands.sort((a,b)=>b.s-a.s||a.idx-b.idx);return cands[0]?cands[0].iso:null;
 }
+// Briefkopf von Praxen, Kanzleien, Büros: „Praxis für X“ + Name in den Folgezeilen
+const PRACTICE=/^(gemeinschafts|zahnarzt|arzt|hausarzt|tierarzt|frauenarzt|kinderarzt)?(praxis|kanzlei|büro|ordination|physiotherapie|ergotherapie|logopädie|heilpraktiker(in)?|rechtsanwält(e|in)|rechtsanwalt|steuerberat(er|ung)|ingenieurbüro|hebamme|apotheke)\b/i;
+const PERSON=/^(?:(?:Dr|Prof|Dipl)\.?(?:[ -]?(?:med|dent|rer\. nat|jur|Ing|Psych)\.?)*\s+)*([A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)?(?:\s+(?:von\s+|van\s+|de\s+)?[A-ZÄÖÜ][a-zäöüß]+(?:-[A-ZÄÖÜ][a-zäöüß]+)?){1,2})$/;
+function letterhead(text){
+  const lines=text.split('\n').map(l=>l.trim()).filter(Boolean),n=Math.max(15,Math.ceil(lines.length*.5)),rcpt=recipient(text);
+  for(let i=0;i<Math.min(n,lines.length);i++){
+    if(!PRACTICE.test(lines[i]))continue;
+    let topic='';const blk=lines.slice(i,i+3).join(' ');const fm=/\bfür\s+([A-ZÄÖÜ][A-Za-zäöüß\-]+)/.exec(blk);if(fm)topic=fm[1];
+    for(let j=i+1;j<Math.min(i+5,lines.length);j++){const m=PERSON.exec(lines[j].replace(/[,;].*$/,''));
+      if(m&&!/^(Herr|Frau|Herrn|Sehr|Alte|Neue|Am|Im|An der)\b/.test(m[1])&&(!rcpt||!m[1].includes(rcpt)))return{name:m[1],topic}}
+    return{name:'',topic};
+  }
+  return{name:'',topic:''};
+}
+// erste Position unter einer Tabellenüberschrift („Art der Behandlung“, „Bezeichnung“, „Leistung“ …)
+function itemTopic(text){const lines=text.split('\n').map(l=>l.trim());
+  for(let i=0;i<lines.length-1;i++){if(!/(art der (behandlung|leistung)|bezeichnung|beschreibung|leistung|artikel|position|pos\.)/i.test(lines[i])||!/(preis|betrag|menge|anzahl|€|eur)/i.test(lines[i]))continue;
+    const m=/^[\d\s.,x×]*([A-ZÄÖÜ][A-Za-zäöüß\-]{3,}(?:\s+[A-Za-zäöüß\-]{3,})?)/.exec(lines[i+1]);if(m)return m[1].replace(/\s+(zu|mit|und|für)$/,'')}
+  return''}
+function recipient(text){const m=/(?:^|\n)\s*(?:Herrn?|Frau)\s*\n?\s*([A-ZÄÖÜ][a-zäöüß]+\s+[A-ZÄÖÜ][a-zäöüß\-]+)/.exec(text);return m?m[1].split(/\s+/).pop():''}
 function findSender(text){
   const lines=text.split('\n').map(l=>l.trim()).filter(Boolean),head=lines.slice(0,Math.max(12,Math.ceil(lines.length*.45))).join('\n');
   let best=null;
@@ -509,7 +535,8 @@ function findSender(text){
   if(ent)return ent[1]+' '+ent[2];
   const sch=/([A-ZÄÖÜ][a-zäöüß]+(?:[ -][A-ZÄÖÜ][a-zäöüß]+)?[ -](?:Grundschule|Gymnasium|Realschule|Gesamtschule|Schule|Kita|Kindergarten))|((?:Grundschule|Gymnasium|Realschule|Gesamtschule|Kita|Kindergarten)(?: (?:[Aa]m|[Ii]m|[Aa]n der|[Ii]n der))? [A-ZÄÖÜ][a-zäöüß\-]+)/.exec(head);
   if(sch)return(sch[1]||sch[2]);
-  const pr=/(?:Praxis|Dr\.\s?med\.?|Zahnarztpraxis)\s*([A-ZÄÖÜ][a-zäöüß]+)/.exec(head);if(pr)return 'Dr '+pr[1];
+  const lh=letterhead(text);if(lh.name)return lh.name;
+  const pr=/(?:Praxis|Dr\.\s?med\.?|Zahnarztpraxis)\s+([A-ZÄÖÜ][a-zäöüß]+)/.exec(head);if(pr)return 'Dr '+pr[1];
   return '';
 }
 function analyze(text,cats,learned){
@@ -520,10 +547,10 @@ function analyze(text,cats,learned){
   let type='';
   for(const[t,re]of TYPES)if(re.test(head)){type=t;break}
   if(!type)for(const[t,re]of TYPES)if(re.test(L)){type=t;break}
-  const sender=findSender(text||''),date=findDate(text||'');
+  const sender=findSender(text||''),date=findDate(text||''),subject=letterhead(text||'').topic||itemTopic(text||'');
   const key=sender.toLowerCase();
   if(key&&learned&&learned[key]){folder=learned[key];how='gelernt'}
-  return{folder,type,sender,date,how};
+  return{folder,type,sender,date,how,subject};
 }
 const cleanPart=s=>String(s||'').replace(/[\\/:*?"<>|#%{}~]/g,'').trim().replace(/\s+/g,'-');
 function buildName(pattern,m){
@@ -647,7 +674,7 @@ async function runAnalysis(){
   finally{ocrLog=null}
   pages.forEach(p=>{p.fmt=estimateFormat(p);log(`Format Seite: ${p.fmt.id} (${Math.round(p.fmt.w)}×${Math.round(p.fmt.h)} mm${p.fmt.est?', Text-Schätzung '+Math.round(p.fmt.est)+' mm':''})`)});
   const text=pages.map(p=>p.text||'').join('\n\n');
-  const cats=parseCats(cfg.cats),a=analyze(text,cats,learn);a.subject='';
+  const cats=parseCats(cfg.cats),a=analyze(text,cats,learn);
   if(cfg.ai&&text.trim().length>20){
     try{const j=await aiAnalyze(text,folderList());
       const s=String(j.absender||'').trim();if(s&&s.length<60)a.sender=s.replace(/\s+(GmbH|AG|SE|KG|e\.\s?V\.|mbH|UG)(\s.*)?$/i,'');
@@ -657,7 +684,7 @@ async function runAnalysis(){
       const f=folderList().find(x=>x.toLowerCase()===String(j.ordner||'').trim().toLowerCase());if(f)a.folder=f;
       a.how='KI';
       const key=a.sender.toLowerCase();if(key&&learn[key]){a.folder=learn[key];a.how='gelernt'}
-    }catch(e){console.error(e);toast('KI-Analyse nicht möglich: '+e.message+' – Regeln verwendet.','err')}
+    }catch(e){console.error(e);log('KI-Fehler Details: '+errMsg(e)+(e&&e.stack?' | '+String(e.stack).split('\n').slice(0,3).join(' / '):''));toast('KI-Analyse nicht möglich: '+errMsg(e)+' – Regeln verwendet.','err')}
   }
   unbusy();
   const date=cfg.dateSrc==='scan'||!a.date?today():a.date;
@@ -715,7 +742,8 @@ async function getAI(onProgress){
   })();
   try{return await aiLoading}finally{aiLoading=null}
 }
-const AI_SYS='Du ordnest eingescannte deutsche Dokumente für ein privates Archiv ein. Antworte ausschließlich mit einem JSON-Objekt, ohne weiteren Text.';
+const AI_SYS='Du ordnest eingescannte deutsche Briefe und Belege für ein privates Archiv ein. Antworte ausschließlich mit einem JSON-Objekt, ohne weiteren Text.';
+const errMsg=e=>e==null?'unbekannter Fehler':typeof e==='string'?e:(e.message||e.reason||(e.toString&&e.toString()!=='[object Object]'?e.toString():'')||(()=>{try{return JSON.stringify(e)}catch{return 'unbekannter Fehler'}})());
 async function aiAnalyze(text,folders){
   const eng=await getAI(r=>busy('KI-Modell wird geladen … (einmalig, WLAN empfohlen)',r.progress));
   busy('KI analysiert das Dokument …');const t0=performance.now();
@@ -728,12 +756,17 @@ ${t}
 """
 
 Gib ein JSON-Objekt mit genau diesen Feldern zurück:
-"absender": Firma, Behörde, Schule oder Person, von der das Dokument stammt – kurzer Name ohne Rechtsform und ohne Adresse
+"absender": wer das Dokument ausgestellt hat (steht meist im Briefkopf oder in der Fußzeile) – Firma, Behörde, Schule, Praxis oder Person, kurz, ohne Rechtsform und ohne Adresse. NICHT der Empfänger (Zeile nach „Herrn“/„Frau“) und NICHT nur erwähnte Dritte.
 "typ": Art des Dokuments in einem Wort, z. B. Rechnung, Mahnung, Vertrag, Bescheid, Bescheinigung, Kontoauszug, Gehaltsabrechnung, Arztbrief, Rezept, Zeugnis, Elternbrief, Angebot, Quittung, Brief
-"datum": Ausstellungsdatum des Dokuments als JJJJ-MM-TT, sonst ""
-"betreff": worum es konkret geht, 2 bis 4 Wörter
-"ordner": genau ein Eintrag aus der Ordnerliste oben`;
-  const res=await eng.chat.completions.create({messages:[{role:'system',content:AI_SYS},{role:'user',content:prompt}],temperature:0.1,max_tokens:180,response_format:{type:'json_object'}});
+"datum": Ausstellungsdatum des Dokuments (meist oben rechts im Briefkopf) als JJJJ-MM-TT – nicht Behandlungs-, Liefer- oder Fälligkeitsdaten. Sonst ""
+"betreff": worum es inhaltlich geht, 1 bis 3 Wörter, z. B. „Osteopathie“, „Mobilfunk November“, „Kfz-Haftpflicht“ – keine Nummern, nicht den Absender wiederholen
+"ordner": genau ein Eintrag aus der Ordnerliste oben
+
+Beispiel: {"absender":"Stadtwerke Rosenheim","typ":"Rechnung","datum":"2026-03-14","betreff":"Strom Jahresabrechnung","ordner":"Wohnen"}`;
+  const msgs=[{role:'system',content:AI_SYS},{role:'user',content:prompt}];let res;
+  try{res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:180,response_format:{type:'json_object'}})}
+  catch(e){log('KI (JSON-Modus) Fehler: '+errMsg(e)+' – zweiter Versuch ohne JSON-Modus');try{await eng.resetChat()}catch{}
+    res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:180})}
   const raw=(res.choices[0].message.content||'').trim();log(`KI (${Math.round(performance.now()-t0)} ms): ${raw.slice(0,240)}`);
   const i=raw.indexOf('{'),j=raw.lastIndexOf('}');if(i<0||j<i)throw new Error('unverständliche Antwort');
   return JSON.parse(raw.slice(i,j+1));
@@ -872,7 +905,7 @@ async function openDoc(id){
   $('#dlgTitle').textContent=d.name+'.pdf';$('#dlgSub').textContent=`${[cfg.base,d.folder].filter(Boolean).join(' › ')} · ${d.pages} S. · ${d.size?Math.round(d.size/1024)+' KB':''}${d.err&&d.status==='error'?' · '+d.err:''}`;
   const acts=[];
   if(d.pdf){acts.push(['share','Teilen …'],['dl','Herunterladen'])}
-  if(d.webUrl)acts.push(['open','In der OneDrive-App öffnen']);
+  if(d.webUrl)acts.push(['open','In OneDrive ansehen'],['app','OneDrive-App starten']);
   if(d.pdf&&d.status!=='uploading')acts.push(['up',d.status==='uploaded'?'Erneut hochladen':'Hochladen']);
   acts.push(['del','Auf diesem Gerät löschen'],['close','Schließen']);
   $('#dlgActs').innerHTML=acts.map(([k,l])=>k==='open'?`<button data-a="open" class="pri">${l}</button>`:`<button data-a="${k}">${l}</button>`).join('');
@@ -880,7 +913,8 @@ async function openDoc(id){
     const file=d.pdf?new File([d.pdf],d.name+'.pdf',{type:'application/pdf'}):null;
     if(a==='share'){try{if(navigator.canShare&&navigator.canShare({files:[file]}))await navigator.share({files:[file],title:d.name});else toast('Teilen wird hier nicht unterstützt – nutze „Herunterladen“.')}catch{}}
     else if(a==='dl'){const u=URL.createObjectURL(file),l=document.createElement('a');l.href=u;l.download=file.name;document.body.append(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),4000)}
-    else if(a==='open'){openOneDrive(d.webUrl)}
+    else if(a==='open'){window.open(d.webUrl,'_blank','noopener')}
+    else if(a==='app'){openOneDriveApp(d.webUrl)}
     else if(a==='up'){d.status='pending';await putDoc(d);dlg.close();syncAll(true)}
     else if(a==='del'){if(confirm(`„${d.name}“ auf diesem Gerät löschen?${d.status==='uploaded'?' Die Datei in OneDrive bleibt erhalten.':' Sie ist noch nicht hochgeladen!'}`)){await delDoc(d.id);dlg.close();renderList()}}
     else dlg.close()};
@@ -903,9 +937,9 @@ function readSettings(){
 }
 async function aiStatus(){const el=$('#sAiInfo');const g=await gpuInfo();
   el.textContent=g.ok?`Grafik: ${g.name||'WebGPU verfügbar'}${g.f16?'':' (ohne 16-Bit-Unterstützung, etwas langsamer)'}${aiModelId?` · geladen: ${aiModelId}`:''}`:g.why}
-function openOneDrive(url){
-  // Auf Android direkt die OneDrive-App ansteuern; ohne App geht es im Browser weiter
-  if(/Android/i.test(navigator.userAgent)){const u=new URL(url);location.href=`intent://${u.host}${u.pathname}${u.search}#Intent;scheme=https;package=com.microsoft.skydrive;S.browser_fallback_url=${encodeURIComponent(url)};end`}
+function openOneDriveApp(url){
+  // Microsoft bietet keinen Link direkt zu einer Datei in der App – wir starten die App (Dateien-Ansicht); ohne App: Web
+  if(/Android/i.test(navigator.userAgent))location.href=`intent://files#Intent;scheme=ms-onedrive;package=com.microsoft.skydrive;S.browser_fallback_url=${encodeURIComponent(url)};end`;
   else window.open(url,'_blank','noopener');
 }
 function closeSettings(){readSettings();renderOd();nav('vHome')}
@@ -923,7 +957,7 @@ $('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');
     const t0=performance.now();const j=await aiAnalyze(sample,folderList());unbusy();
     el.textContent=`Funktioniert (${((performance.now()-t0)/1000).toFixed(1)} s inkl. Laden): ${[j.datum,j.typ,j.absender,j.betreff,'→ '+j.ordner].filter(Boolean).join(' · ')}`;
     if(!cfg.ai){$('#sAi').checked=true;readSettings()}}
-  catch(e){unbusy();el.textContent='Nicht möglich: '+e.message;log('KI-Test: '+e.message)}};
+  catch(e){unbusy();el.textContent='Nicht möglich: '+errMsg(e);log('KI-Test: '+errMsg(e))}};
 $('#sLogClear').onclick=()=>{LOG.length=0;save('log',LOG);$('#sLog').textContent=''};
 $('#btnGallery').onclick=()=>{$('#fGal').click()};
 $('#btnSync').onclick=()=>syncAll(true);
