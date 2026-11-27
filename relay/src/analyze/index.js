@@ -33,7 +33,13 @@ module.exports = async function (context, req) {
     const text = await r.text();
     let data; try { data = JSON.parse(text); } catch { data = { error: text.slice(0, 300) }; }
     if (!r.ok) return send(r.status, { error: (data.error && (data.error.message || data.error)) || ('GitHub Models: HTTP ' + r.status) });
-    return send(200, { content: data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content || '', model });
+    const c = data.choices && data.choices[0];
+    const content = c && c.message && c.message.content || '';
+    if (!content) {
+      const why = (c && c.finish_reason) || (c && c.message && c.message.refusal) || (data.error && (data.error.message || data.error)) || text.slice(0, 200) || 'leer';
+      return send(502, { error: 'GitHub Models lieferte keinen Text (' + String(why).slice(0, 200) + ')' });
+    }
+    return send(200, { content, model: data.model || model });
   } catch (e) {
     return send(500, { error: String(e && e.message || e) });
   }

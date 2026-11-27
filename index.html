@@ -344,7 +344,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27r';
+const VERSION='2026-11-27s';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -773,10 +773,11 @@ Gib ein JSON-Objekt mit genau diesen Feldern zurück:
   let r;try{r=await fetch(cfg.aiUrl,{method:'POST',signal:ctl.signal,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({model:cfg.aiModel,messages:[{role:'system',content:AI_SYS},{role:'user',content:prompt}]})})}
   catch(e){throw new Error(/abort/i.test(errMsg(e))?'Keine Antwort nach 25 s':'Azure-Funktion nicht erreichbar')}
   finally{clearTimeout(to)}
-  const data=await r.json().catch(()=>({}));
-  if(!r.ok)throw new Error(data.error||('HTTP '+r.status));
+  const body=await r.text().catch(()=>'');let data;try{data=JSON.parse(body)}catch{data={}}
+  if(!r.ok)throw new Error(data.error||('HTTP '+r.status+' '+body.slice(0,120)));
+  if(data.content==null){log('KI-Rohantwort: '+body.slice(0,300));throw new Error('Antwort der Azure-Funktion ohne Inhalt: '+(body.slice(0,120)||'leer'))}
   const raw=String(data.content||'').trim();log(`KI (${Math.round(performance.now()-t0)} ms, ${data.model||''}): ${raw.slice(0,200)}`);
-  const i=raw.indexOf('{'),j=raw.lastIndexOf('}');if(i<0||j<i)throw new Error('unverständliche Antwort');
+  const i=raw.indexOf('{'),j=raw.lastIndexOf('}');if(i<0||j<i)throw new Error('unverständliche Antwort: '+(raw.slice(0,120)||'leer'));
   return JSON.parse(raw.slice(i,j+1));
 }
 // Nur das Aussagekräftige an die KI: Briefkopf (Anfang) + Zeilen mit Schlüsselwörtern – kürzer = deutlich schneller
