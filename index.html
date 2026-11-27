@@ -47,6 +47,7 @@ h2{font-size:18px;margin:30px 0 4px}
 .scanline{animation:scan 2.8s ease-in-out infinite alternate}
 @keyframes scan{from{transform:translateY(0)}to{transform:translateY(118px)}}
 @media (prefers-reduced-motion:reduce){.scanline{animation:none}}
+[hidden]{display:none!important}
 .banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-radius:14px;background:var(--card);border:1px solid var(--warn);margin:4px 0 12px}
 .banner p{margin:0;flex:1 1 200px}
 .search{margin-top:20px}
@@ -88,6 +89,24 @@ summary{min-height:44px;display:flex;align-items:center;cursor:pointer;color:var
 pre{white-space:pre-wrap;font-size:13px;max-height:260px;overflow:auto;margin:0 0 12px}
 .wide{width:100%;margin-top:22px;min-height:52px;font-size:17px}
 .copyrow{display:flex;gap:8px;align-items:center}.copyrow code{flex:1;overflow-wrap:anywhere;font-size:13px;padding:10px;background:var(--card);border:1px solid var(--line);border-radius:10px}
+/* kamera */
+#vCam{position:fixed;inset:0;background:#000;z-index:5;padding:0}
+#camVid{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.camguide{position:absolute;inset:14% 8% 22%;pointer-events:none}
+.camguide i{position:absolute;width:42px;height:42px;border:4px solid #ff5a1f}
+.camguide i:nth-child(1){left:0;top:0;border-right:0;border-bottom:0;border-top-left-radius:8px}
+.camguide i:nth-child(2){right:0;top:0;border-left:0;border-bottom:0;border-top-right-radius:8px}
+.camguide i:nth-child(3){left:0;bottom:0;border-right:0;border-top:0;border-bottom-left-radius:8px}
+.camguide i:nth-child(4){right:0;bottom:0;border-left:0;border-top:0;border-bottom-right-radius:8px}
+.camtop,.cambar{position:absolute;left:0;right:0;display:flex;align-items:center;justify-content:space-between;padding:12px 16px;color:#fff}
+.camtop{top:env(safe-area-inset-top);background:linear-gradient(#0009,#0000)}
+.cambar{bottom:env(safe-area-inset-bottom);padding-bottom:28px;background:linear-gradient(#0000,#000a)}
+.camtop button,.cambar .icon{color:#fff;background:#0006;border-radius:50%}
+.camtop button[aria-pressed=true]{background:#ff5a1f}
+.shutter{width:76px;height:76px;min-height:0;padding:0;border-radius:50%;background:#fff;border:5px solid #ffffff80;box-shadow:0 0 0 3px #fff inset}
+.shutter:active{transform:scale(.94)}
+.camhint{position:absolute;left:0;right:0;bottom:calc(130px + env(safe-area-inset-bottom));text-align:center;color:#fff;font-size:14px;text-shadow:0 1px 3px #000}
+#sLog{font-size:12px;max-height:220px;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px}
 /* overlays */
 #busy{position:fixed;inset:0;background:#0b0c0fcc;color:#fff;display:grid;place-content:center;justify-items:center;gap:14px;z-index:20;padding:24px;text-align:center}
 #busy[hidden]{display:none}
@@ -132,6 +151,21 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
   </div>
   <input id="fCam" type="file" accept="image/*" capture="environment" hidden>
   <input id="fGal" type="file" accept="image/*" multiple hidden>
+</section>
+
+<section id="vCam" class="view">
+  <video id="camVid" playsinline muted autoplay></video>
+  <div class="camguide" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+  <div class="camtop">
+    <button class="icon" id="camClose" aria-label="Schließen"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+    <button class="icon" id="camTorch" aria-label="Licht" aria-pressed="false" hidden><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg></button>
+  </div>
+  <p class="camhint">Blatt flach hinlegen, ganz ins Bild nehmen, ruhig halten.</p>
+  <div class="cambar">
+    <button class="icon" id="camGal" aria-label="Aus der Galerie"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><path d="M21 15l-5-5L5 21"/></svg></button>
+    <button id="camShot" class="shutter" aria-label="Foto aufnehmen"></button>
+    <span style="width:44px"></span>
+  </div>
 </section>
 
 <section id="vCrop" class="view dark">
@@ -241,6 +275,11 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
 
     <h2>Speicher</h2>
     <p class="mute" id="sStore" style="margin:4px 0 0"></p>
+
+    <h2>Protokoll</h2>
+    <p class="hint">Falls etwas hakt: Protokoll kopieren und an Claude schicken. Version <span id="sVer"></span></p>
+    <pre id="sLog"></pre>
+    <div class="row"><button id="sLogCopy">Protokoll kopieren</button><button id="sLogClear">Leeren</button></div>
   </div>
 </section>
 
@@ -252,7 +291,6 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
 {
 'use strict';
 /* ---------- Konstanten & Einstellungen ---------- */
-const CV_URL='https://docs.opencv.org/4.10.0/opencv.js';
 const TESS_URL='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js';
 const PDF_URL='https://cdn.jsdelivr.net/npm/jspdf@2.5.2/dist/jspdf.umd.min.js';
 const A4W=1654,A4H=2339; // A4 bei 200 dpi
@@ -285,28 +323,28 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-function toast(msg,type=''){const d=document.createElement('div');d.className=type;d.textContent=msg;$('#toast').append(d);setTimeout(()=>d.remove(),type==='err'?6000:3200)}
+const VERSION='2026-11-27c';
+const LOG=load('log',[]);
+function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
+addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
+addEventListener('unhandledrejection',e=>{const m=e.reason&&e.reason.message||String(e.reason);log('Fehler: '+m);unbusy();toast('Fehler: '+m,'err')});
+function toast(msg,type=''){if(type==='err')log('Meldung: '+msg);const d=document.createElement('div');d.className=type;d.textContent=msg;$('#toast').append(d);setTimeout(()=>d.remove(),type==='err'?6000:3200)}
 function busy(msg,p){$('#busy').hidden=false;$('#busyMsg').textContent=msg;$('#busyBar').style.width=p==null?'0':Math.round(p*100)+'%';$('#busyBar').parentElement.style.visibility=p==null?'hidden':'visible'}
 function unbusy(){$('#busy').hidden=true}
 let view='vHome',skipPop=false;
 function nav(v){
+  if(view==='vCam'&&v!=='vCam')stopCam();
   if(view==='vHome'&&v!=='vHome')history.pushState({s:1},'');
   if(v==='vHome'&&view!=='vHome'&&history.state&&history.state.s){skipPop=true;history.back()}
   document.querySelectorAll('.view').forEach(e=>e.classList.toggle('on',e.id===v));view=v;window.scrollTo(0,0);
   if(v==='vCrop')requestAnimationFrame(edLayout);
 }
-const backOf={vCrop:()=>cropBack(),vPages:()=>pgBack(),vMeta:()=>nav('vPages'),vSet:()=>closeSettings()};
+const backOf={vCam:()=>camBack(),vCrop:()=>cropBack(),vPages:()=>pgBack(),vMeta:()=>nav('vPages'),vSet:()=>closeSettings()};
 addEventListener('popstate',()=>{if(skipPop){skipPop=false;return}if(view!=='vHome'){backOf[view]();if(view!=='vHome')history.pushState({s:1},'')}});
 
 /* ---------- Bibliotheken nachladen ---------- */
 const libs={};
 function loadScript(src){return libs[src]||(libs[src]=new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.async=true;s.onload=res;s.onerror=()=>{delete libs[src];s.remove();rej(new Error('Bibliothek konnte nicht geladen werden – Internetverbindung prüfen.'))};document.head.append(s)}))}
-async function getCV(){
-  if(!(window.cv&&window.cv.Mat))busy('Bildverarbeitung wird geladen … (einmalig ca. 10 MB)');
-  await loadScript(CV_URL);
-  const t0=Date.now();
-  for(;;){let c=window.cv;if(c instanceof Promise){c=await c;window.cv=c}if(c&&c.Mat)return c;if(Date.now()-t0>90000)throw new Error('OpenCV startet nicht');await sleep(80)}
-}
 let ocrWorker=null,ocrLog=null;
 async function getOCR(){await loadScript(TESS_URL);if(!ocrWorker)ocrWorker=await Tesseract.createWorker(['deu','eng'],1,{logger:m=>ocrLog&&ocrLog(m)});return ocrWorker}
 
@@ -325,53 +363,48 @@ async function fileToCanvas(file){
   finally{URL.revokeObjectURL(url)}
 }
 
+/* ---------- Bildverarbeitung im Hintergrund-Thread (cv-worker.js) ---------- */
+let cvW=null,cvReady=null,cvLoaded=false,cvSeq=0;const cvPend=new Map();
+function cvWorker(){
+  if(cvW)return cvReady;
+  const w=new Worker('cv-worker.js');cvW=w;
+  cvReady=new Promise((res,rej)=>{
+    w.onmessage=e=>{const d=e.data;
+      if('ready' in d){if(d.ready){cvLoaded=true;log('Bildverarbeitung bereit');res()}else{rej(new Error('Bildverarbeitung: '+d.err))}return}
+      const p=cvPend.get(d.id);if(!p)return;cvPend.delete(d.id);d.ok?p.res(d.res):p.rej(new Error('Bildverarbeitung: '+d.err))};
+    w.onerror=e=>{const er=new Error('Bildverarbeitung konnte nicht geladen werden'+(e.message?` (${e.message})`:' – Internetverbindung prüfen'));
+      rej(er);for(const p of cvPend.values())p.rej(er);cvPend.clear();if(cvW===w){cvW=null;cvLoaded=false}try{w.terminate()}catch{}};
+  });
+  cvReady.catch(()=>{});return cvReady;
+}
+async function cvCall(op,args,transfer=[]){
+  if(!cvLoaded){const prev=$('#busyMsg').textContent;busy('Bildverarbeitung wird geladen … (einmalig ca. 10 MB)');await cvWorker();busy(prev)}
+  const t0=performance.now();
+  return new Promise((res,rej)=>{const id=++cvSeq;cvPend.set(id,{res:v=>{log(`${op}: ${Math.round(performance.now()-t0)} ms`);res(v)},rej});cvW.postMessage({id,op,args},transfer)});
+}
+const imgData=c=>c.getContext('2d',{willReadFrequently:true}).getImageData(0,0,c.width,c.height);
+function toCanvas(id){const c=document.createElement('canvas');c.width=id.width;c.height=id.height;c.getContext('2d').putImageData(id,0,0);return c}
+
 /* ---------- Dokumentkanten finden ---------- */
 function orderPts(p){const s=p.map(q=>q.x+q.y),d=p.map(q=>q.y-q.x);const lo=a=>a.indexOf(Math.min(...a)),hi=a=>a.indexOf(Math.max(...a));return[p[lo(s)],p[lo(d)],p[hi(s)],p[hi(d)]]}
 function defaultCorners(c){const ix=c.width*.05,iy=c.height*.05;return[{x:ix,y:iy},{x:c.width-ix,y:iy},{x:c.width-ix,y:c.height-iy},{x:ix,y:c.height-iy}]}
-function detect(cv,canvas){
+async function detectDoc(canvas){
   const k=Math.min(1,900/Math.max(canvas.width,canvas.height));
   const sm=document.createElement('canvas');sm.width=Math.round(canvas.width*k);sm.height=Math.round(canvas.height*k);
   sm.getContext('2d').drawImage(canvas,0,0,sm.width,sm.height);
-  const W=sm.width,H=sm.height,mats=[],T=m=>(mats.push(m),m);
-  try{
-    const src=T(cv.imread(sm)),gray=T(new cv.Mat()),blur=T(new cv.Mat());
-    cv.cvtColor(src,gray,cv.COLOR_RGBA2GRAY);cv.GaussianBlur(gray,blur,new cv.Size(5,5),0);
-    const strategies=[
-      ()=>{const e=T(new cv.Mat());cv.Canny(blur,e,40,120);cv.dilate(e,e,T(cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(5,5))));return e},
-      ()=>{const t=T(new cv.Mat());cv.threshold(blur,t,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);cv.morphologyEx(t,t,cv.MORPH_CLOSE,T(cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(11,11))));return t},
-      ()=>{const e=T(new cv.Mat());cv.Canny(blur,e,15,60);cv.dilate(e,e,T(cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(7,7))));return e}
-    ];
-    for(const s of strategies){const q=bestQuad(cv,s(),W*H);if(q)return orderPts(q.map(p=>({x:p.x/k,y:p.y/k})))}
-  }catch(e){console.warn('detect',e)}
-  finally{mats.forEach(m=>{try{m.delete()}catch{}})}
-  return null;
-}
-function bestQuad(cv,bin,area){
-  const cs=new cv.MatVector(),hi=new cv.Mat();let best=null,bestA=0;
-  try{cv.findContours(bin,cs,hi,cv.RETR_LIST,cv.CHAIN_APPROX_SIMPLE);
-    for(let i=0;i<cs.size();i++){const c=cs.get(i);const a=cv.contourArea(c);
-      if(a>area*.12&&a<area*.985&&a>bestA){const peri=cv.arcLength(c,true);
-        for(const eps of[.02,.035,.05]){const ap=new cv.Mat();cv.approxPolyDP(c,ap,eps*peri,true);
-          const ok=ap.rows===4&&cv.isContourConvex(ap);
-          if(ok){best=[];for(let j=0;j<4;j++)best.push({x:ap.data32S[j*2],y:ap.data32S[j*2+1]});bestA=a}
-          ap.delete();if(ok)break}}
-      c.delete()}}
-  finally{cs.delete();hi.delete()}
-  return best;
+  const id=imgData(sm);
+  try{const q=await cvCall('detect',[id],[id.data.buffer]);return q?orderPts(q.map(p=>({x:p.x/k,y:p.y/k}))):null}
+  catch(e){if(!cvLoaded)throw e;log('Erkennung: '+e.message);return null}
 }
 
 /* ---------- Entzerren ---------- */
 async function warpPage(p){
-  const cv=await getCV();const[tl,tr,br,bl]=p.corners;const D=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
-  const w=Math.max(D(tl,tr),D(bl,br)),h=Math.max(D(tl,bl),D(tr,br)),land=w>h,r=Math.max(w,h)/Math.min(w,h);
+  const[tl,tr,br,bl]=p.corners;const D=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  const w=Math.max(D(tl,tr),D(bl,br)),h=Math.max(D(tl,bl),D(tr,br)),land=w>h,r=Math.max(w,h)/Math.max(1,Math.min(w,h));
   const toA4=cfg.format==='a4'||(cfg.format==='auto'&&r>1.22&&r<1.62);
-  let W,H;if(toA4){W=land?A4H:A4W;H=land?A4W:A4H}else{const s=A4H/Math.max(w,h);W=Math.round(w*s);H=Math.round(h*s)}
-  const src=cv.imread(p.src),dst=new cv.Mat(),
-    a=cv.matFromArray(4,1,cv.CV_32FC2,[tl.x,tl.y,tr.x,tr.y,br.x,br.y,bl.x,bl.y]),
-    b=cv.matFromArray(4,1,cv.CV_32FC2,[0,0,W,0,W,H,0,H]),M=cv.getPerspectiveTransform(a,b);
-  cv.warpPerspective(src,dst,M,new cv.Size(W,H),cv.INTER_LINEAR,cv.BORDER_REPLICATE,new cv.Scalar());
-  const out=document.createElement('canvas');cv.imshow(out,dst);[src,dst,a,b,M].forEach(m=>m.delete());
-  p.warped=out;p.auto=null;
+  let W,H;if(toA4){W=land?A4H:A4W;H=land?A4W:A4H}else{const s=A4H/Math.max(w,h);W=Math.max(1,Math.round(w*s));H=Math.max(1,Math.round(h*s))}
+  const id=imgData(p.src);
+  p.warped=toCanvas(await cvCall('warp',[id,p.corners.map(c=>({x:c.x,y:c.y})),W,H],[id.data.buffer]));p.auto=null;
 }
 
 /* ---------- Farbfilter ---------- */
@@ -386,33 +419,12 @@ function autoMode(c){
   for(let i=0;i<d.length;i+=4){const r=d[i]*255/wp[0],g=d[i+1]*255/wp[1],b=d[i+2]*255/wp[2];const mx=Math.max(r,g,b),mn=Math.min(r,g,b);if(mx-mn>55&&mx>60)col++}
   return col/n>.012?'color':'bw';
 }
-function normBg(cv,g){ // Hintergrund schätzen (Text wegdilatieren) und herausdividieren -> Papier wird reinweiß
-  const s=new cv.Mat(),bg=new cv.Mat(),out=new cv.Mat(),k=cv.getStructuringElement(cv.MORPH_RECT,new cv.Size(7,7));
-  cv.resize(g,s,new cv.Size(0,0),.25,.25,cv.INTER_AREA);cv.dilate(s,s,k);cv.medianBlur(s,s,21);
-  cv.resize(s,bg,g.size(),0,0,cv.INTER_LINEAR);cv.divide(g,bg,out,255);
-  [s,bg,k].forEach(m=>m.delete());return out;
-}
 async function enhance(p){
-  const cv=await getCV();
   if(p.mode==='auto'&&!p.auto)p.auto=autoMode(p.warped);
   const mode=p.mode==='auto'?p.auto:p.mode;p.resolved=mode;
   if(mode==='orig'){p.out=rotate(p.warped,p.rot);return thumb(p)}
-  const src=cv.imread(p.warped),res=new cv.Mat();
-  if(mode==='color'){
-    const rgb=new cv.Mat(),ch=new cv.MatVector(),nv=new cv.MatVector(),tmp=[];
-    cv.cvtColor(src,rgb,cv.COLOR_RGBA2RGB);cv.split(rgb,ch);
-    for(let i=0;i<3;i++){const c=ch.get(i);const n=normBg(cv,c);nv.push_back(n);tmp.push(c,n)}
-    cv.merge(nv,res);res.convertTo(res,-1,1.12,-20);
-    tmp.forEach(m=>m.delete());[rgb,ch,nv].forEach(m=>m.delete());
-  }else{
-    const g=new cv.Mat();cv.cvtColor(src,g,cv.COLOR_RGBA2GRAY);const n=normBg(cv,g);
-    if(mode==='gray')n.convertTo(res,-1,1.3,-60);
-    else{const t0=new cv.Mat();const t=cv.threshold(n,t0,0,255,cv.THRESH_BINARY+cv.THRESH_OTSU);t0.delete();
-      let lo=Math.max(0,t-50),hi=Math.min(255,t+18);if(hi-lo<30)lo=hi-30;const a=255/(hi-lo);n.convertTo(res,-1,a,-lo*a)}
-    g.delete();n.delete();
-  }
-  const c=document.createElement('canvas');cv.imshow(c,res);src.delete();res.delete();
-  p.out=rotate(c,p.rot);thumb(p);
+  const id=imgData(p.warped);
+  p.out=rotate(toCanvas(await cvCall('enhance',[id,mode],[id.data.buffer])),p.rot);thumb(p);
 }
 function rotate(c,r){r=((r%4)+4)%4;if(!r)return c;const o=document.createElement('canvas'),sw=r%2;o.width=sw?c.height:c.width;o.height=sw?c.width:c.height;const x=o.getContext('2d');x.translate(o.width/2,o.height/2);x.rotate(r*Math.PI/2);x.drawImage(c,-c.width/2,-c.height/2);return o}
 function smallJpeg(c,max=200,q=.7){const k=max/Math.max(c.width,c.height),s=document.createElement('canvas');s.width=Math.round(c.width*k);s.height=Math.round(c.height*k);const x=s.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,s.width,s.height);x.drawImage(c,0,0,s.width,s.height);return s.toDataURL('image/jpeg',q)}
@@ -517,19 +529,55 @@ const endDrag=()=>{if(ed.drag>=0){ed.drag=-1;edDraw()}};cropCv.addEventListener(
 /* ---------- Scan-Ablauf ---------- */
 let pages=[],cur=0,editIdx=-1,meta=null;
 function openCrop(p,idx){ed.p=p;editIdx=idx;$('#cropHint').textContent=p.detected?'Dokument erkannt – Ecken bei Bedarf verschieben.':'Kein Dokument sicher erkannt – bitte die vier Ecken auf die Blattecken ziehen.';nav('vCrop')}
-async function onFiles(files,fromGallery){
-  files=[...files].filter(f=>f.type.startsWith('image/'));if(!files.length)return;
+async function processCanvas(src,single){
+  log(`Bild ${src.width}×${src.height}`);
+  busy('Dokument wird gesucht …');
+  const found=await detectDoc(src);
+  const p={src,corners:found||defaultCorners(src),detected:!!found,mode:'auto',rot:0};
+  if(single&&(cfg.review||!found)){unbusy();openCrop(p,-1);return false}
+  busy('Seite wird entzerrt …');await warpPage(p);await enhance(p);pages.push(p);return true;
+}
+async function onFiles(files){
+  files=[...files].filter(f=>!f.type||f.type.startsWith('image/'));if(!files.length)return;
   try{
-    const cv=await getCV();
-    for(const[i,f]of files.entries()){
-      busy(files.length>1?`Bild ${i+1} von ${files.length} wird verarbeitet …`:'Dokument wird gesucht …');
-      const src=await fileToCanvas(f);const found=detect(cv,src);
-      const p={src,corners:found||defaultCorners(src),detected:!!found,mode:'auto',rot:0};
-      if(files.length===1&&(cfg.review||!found)){unbusy();openCrop(p,-1);return}
-      busy(`Seite wird entzerrt …`);await warpPage(p);await enhance(p);pages.push(p);
-    }
+    if(files.length===1){busy('Bild wird geladen …');if(!(await processCanvas(await fileToCanvas(files[0]),true)))return}
+    else for(const[i,f]of files.entries()){busy(`Bild ${i+1} von ${files.length} wird verarbeitet …`);await processCanvas(await fileToCanvas(f),false)}
     cur=pages.length-1;renderPages();nav('vPages');
   }catch(e){console.error(e);toast(e.message||String(e),'err')}finally{unbusy()}
+}
+
+/* ---------- Eingebaute Kamera (kein Wechsel in die System-Kamera-App) ---------- */
+let stream=null,track=null,torchOn=false;
+async function openCam(){
+  cvWorker().catch(()=>{}); // Bildverarbeitung lädt im Hintergrund, während du zielst
+  if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){log('Keine Kamera-API – System-Kamera');$('#fCam').click();return}
+  busy('Kamera wird gestartet …');
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({audio:false,video:{facingMode:{ideal:'environment'},width:{ideal:3840},height:{ideal:2160}}});
+    track=stream.getVideoTracks()[0];const v=$('#camVid');v.srcObject=stream;await v.play().catch(()=>{});
+    const caps=track.getCapabilities?track.getCapabilities():{};$('#camTorch').hidden=!caps.torch;torchOn=false;
+    const st=track.getSettings?track.getSettings():{};log(`Kamera ${st.width}×${st.height}`);
+    nav('vCam');
+  }catch(e){log('Kamera: '+e.name+' '+e.message);stopCam();
+    toast(e.name==='NotAllowedError'?'Kein Kamerazugriff erlaubt – öffne die System-Kamera.':'Kamera nicht verfügbar – öffne die System-Kamera.');$('#fCam').click()}
+  finally{unbusy()}
+}
+function stopCam(){if(stream)stream.getTracks().forEach(t=>t.stop());stream=null;track=null;const v=$('#camVid');if(v)v.srcObject=null}
+function camBack(){stopCam();nav(pages.length?'vPages':'vHome');if(pages.length)renderPages()}
+async function shoot(){
+  if(!track)return;busy('Foto wird aufgenommen …');let src=null;
+  try{
+    if('ImageCapture' in window){
+      try{const ic=new ImageCapture(track);let opts={};
+        try{const pc=await ic.getPhotoCapabilities();if(pc&&pc.imageWidth&&pc.imageWidth.max)opts={imageWidth:pc.imageWidth.max,imageHeight:pc.imageHeight.max};if(torchOn)opts.fillLightMode='flash'}catch{}
+        src=await fileToCanvas(await ic.takePhoto(opts))}
+      catch(e){log('takePhoto: '+e.name+' '+e.message)}
+    }
+    if(!src){const v=$('#camVid');src=document.createElement('canvas');src.width=v.videoWidth;src.height=v.videoHeight;src.getContext('2d').drawImage(v,0,0)}
+    stopCam();
+    if(await processCanvas(src,true)){cur=pages.length-1;renderPages();nav('vPages')}
+  }catch(e){console.error(e);toast(e.message||String(e),'err');if(view==='vCam')camBack()}
+  finally{unbusy()}
 }
 async function cropOk(){const p=ed.p;busy('Seite wird entzerrt und aufbereitet …');
   try{await warpPage(p);await enhance(p);p.ocrFor=null;if(editIdx>=0){pages[editIdx]=p;cur=editIdx}else{pages.push(p);cur=pages.length-1}renderPages();nav('vPages')}
@@ -730,7 +778,7 @@ function openSettings(){
   $('#sClient').value=cfg.clientId;$('#sTenant').value=cfg.tenant;$('#sRedirect').textContent=redirectUri();$('#sBase').value=cfg.base;
   $('#sAuto').checked=cfg.autoUpload;$('#sDrop').checked=cfg.dropLocal;$('#sFormat').value=cfg.format;$('#sReview').checked=cfg.review;
   $('#sQual').value=cfg.quality;$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';$('#sPattern').value=cfg.pattern;$('#sDateSrc').value=cfg.dateSrc;$('#sCats').value=cfg.cats;
-  $('#sLearnN').textContent=Object.keys(learn).length;renderOd();
+  $('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
   (async()=>{try{const e=await navigator.storage.estimate();const n=(await allDocs()).length;$('#sStore').textContent=`${n} Scans, ca. ${(e.usage/1048576).toFixed(1)} MB belegt (inkl. Texterkennungs- und Bildverarbeitungsdaten).`}catch{$('#sStore').textContent=''}})();
   nav('vSet');
 }
@@ -742,27 +790,33 @@ function readSettings(){
 function closeSettings(){readSettings();renderOd();nav('vHome')}
 
 /* ---------- Ereignisse ---------- */
-let camTarget='new';
-$('#btnScan').onclick=()=>{camTarget='new';$('#fCam').click()};
+$('#btnScan').onclick=openCam;
+$('#camShot').onclick=shoot;
+$('#camClose').onclick=camBack;
+$('#camGal').onclick=()=>{camBack();$('#fGal').click()};
+$('#camTorch').onclick=async()=>{if(!track)return;torchOn=!torchOn;try{await track.applyConstraints({advanced:[{torch:torchOn}]})}catch(e){torchOn=false;log('Licht: '+e.message)}$('#camTorch').setAttribute('aria-pressed',String(torchOn))};
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&view==='vCam')camBack()});
+$('#sLogCopy').onclick=async()=>{try{await navigator.clipboard.writeText(`Scan ${VERSION}\n${navigator.userAgent}\n`+LOG.join('\n'));toast('Protokoll kopiert','ok')}catch{toast('Kopieren nicht möglich')}};
+$('#sLogClear').onclick=()=>{LOG.length=0;save('log',LOG);$('#sLog').textContent=''};
 $('#btnGallery').onclick=()=>{$('#fGal').click()};
 $('#btnSync').onclick=()=>syncAll(true);
 $('#btnReauth').onclick=login;
 $('#btnSettings').onclick=openSettings;
-$('#fCam').onchange=e=>{const f=e.target.files;if(f&&f.length)onFiles(f,false);e.target.value=''};
-$('#fGal').onchange=e=>{const f=e.target.files;if(f&&f.length)onFiles(f,true);e.target.value=''};
+$('#fCam').onchange=e=>{const f=e.target.files;log('System-Kamera: '+(f?f.length:0)+' Bild');if(f&&f.length)onFiles(f);e.target.value=''};
+$('#fGal').onchange=e=>{const f=e.target.files;if(f&&f.length)onFiles(f);e.target.value=''};
 $('#search').oninput=renderList;
 $('#chips').onclick=e=>{const b=e.target.closest('button');if(b){chip=b.dataset.f;renderList()}};
 $('#list').onclick=e=>{const b=e.target.closest('.doc');if(b)openDoc(b.dataset.id)};
 $('#cropBack').onclick=cropBack;$('#cropOk').onclick=cropOk;
 $('#cropFull').onclick=()=>{const s=ed.p.src;ed.p.corners=[{x:0,y:0},{x:s.width,y:0},{x:s.width,y:s.height},{x:0,y:s.height}];edDraw()};
-$('#cropRetake').onclick=()=>$('#fCam').click();
+$('#cropRetake').onclick=openCam;
 $('#pgBack').onclick=pgBack;
 $('#modes').onclick=e=>{const b=e.target.closest('button');if(b)setMode(b.dataset.m)};
 $('#thumbs').onclick=e=>{const b=e.target.closest('button');if(b){cur=+b.dataset.i;renderPages()}};
 $('#pgRot').onclick=()=>{const p=pages[cur];if(!p)return;p.rot=(p.rot+1)%4;p.out=rotate(p.out,1);p.ocrFor=null;thumb(p);renderPages()};
 $('#pgEdit').onclick=()=>{const p=pages[cur];if(p)openCrop({...p,corners:p.corners.map(c=>({...c})),detected:true},cur)};
 $('#pgDel').onclick=()=>{if(pages.length<=1){pgBack();return}pages.splice(cur,1);cur=Math.max(0,cur-1);renderPages()};
-$('#pgAdd').onclick=()=>$('#fCam').click();
+$('#pgAdd').onclick=openCam;
 $('#pgAddGal').onclick=()=>$('#fGal').click();
 $('#pgDone').onclick=runAnalysis;
 $('#mtBack').onclick=()=>{renderPages();nav('vPages')};
@@ -787,9 +841,7 @@ addEventListener('online',()=>cfg.autoUpload&&syncAll());
   if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
   await handleRedirect();renderOd();await renderList();
   if(cfg.autoUpload)syncAll();
-  // Bildverarbeitung im Leerlauf vorladen, damit der erste Scan schnell startet
-  const warm=()=>loadScript(CV_URL).catch(()=>{});
-  if(navigator.onLine)('requestIdleCallback' in window?requestIdleCallback(warm,{timeout:4000}):setTimeout(warm,2500));
+  log('App gestartet, Version '+VERSION);
 })();
 }
 </script>

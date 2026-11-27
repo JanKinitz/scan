@@ -1,7 +1,7 @@
 // Service Worker: App offline verfügbar machen, große Bibliotheken dauerhaft cachen
-const SHELL_CACHE = 'scan-shell-v2';
+const SHELL_CACHE = 'scan-shell-v3';
 const LIB_CACHE = 'scan-libs-v1';
-const SHELL = ['./', './index.html', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png'];
+const SHELL = ['./', './index.html', './cv-worker.js', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png'];
 const LIB_HOSTS = /^https:\/\/(docs\.opencv\.org|cdn\.jsdelivr\.net)\//;
 
 self.addEventListener('install', e => {
