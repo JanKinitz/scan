@@ -340,7 +340,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27f';
+const VERSION='2026-11-27g';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
