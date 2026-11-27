@@ -334,7 +334,8 @@ Kaufbelege und Garantie: kassenbon, quittung, garantie, gewährleistung, bestell
 const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{betreff}_{absender}',dateSrc:'doc',cats:DEFAULT_CATS,ai:false,aiModel:'std'};
 const load=(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v??d}catch{return d}};
 const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};
-let cfg={...DEF,...load('cfg',{})};if(!cfg.clientId)cfg.clientId=DEF.clientId;if(['{datum}_{typ}_{absender}','{datum}_{typ}_{absender}_{betreff}'].includes(cfg.pattern))cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';if(cfg.aiModel==='big'&&!cfg.aiMig1){cfg.aiModel='std';cfg.aiMig1=true;save('cfg',cfg)} // großes Modell lief auf dem Handy nicht stabil
+let cfg={...DEF,...load('cfg',{})};if(!cfg.clientId)cfg.clientId=DEF.clientId;if(['{datum}_{typ}_{absender}','{datum}_{typ}_{absender}_{betreff}'].includes(cfg.pattern))cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';if(!cfg.aiMig2){cfg.aiMig2=true;if(cfg.ai&&!(cfg.aiVariant>0))cfg.aiVariant=1;save('cfg',cfg)} // Variante 1 (Worker) ist auf dem Handy bereits abgestürzt
+if(cfg.aiModel==='big'&&!cfg.aiMig1){cfg.aiModel='std';cfg.aiMig1=true;save('cfg',cfg)} // großes Modell lief auf dem Handy nicht stabil
 let learn=load('learn',{});   // absender-schlüssel -> ordner
 let tok=load('tok',{});
 
@@ -344,7 +345,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27o';
+const VERSION='2026-11-27p';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -715,10 +716,7 @@ async function aiRefine(m,text){
     const msg=errMsg(e);log('KI-Fehler Details: '+msg+(e&&e.stack?' | '+String(e.stack).split('\n').slice(0,3).join(' / '):''));
     let note='KI nicht verfügbar – Regeln verwendet';
     if(e&&e.notCached){if(meta===m)showMetaInfo('KI-Modell noch nicht heruntergeladen (Einstellungen → KI-Analyse)');return}
-    if(/mapAsync|Instance reference|device (was )?lost|DeviceLost|out of memory|OOM|GPU/i.test(msg)){
-      aiEngine=null;aiModelId='';const down={big:'std',std:'small'}[cfg.aiModel];
-      if(down){cfg.aiModel=down;save('cfg',cfg);note=`KI-Modell war zu groß für das Handy – ab jetzt „${down==='std'?'Standard':'Klein'}“`}
-    }
+    if(aiCrash(msg))note=aiNextVariant();
     if(meta===m)showMetaInfo(note);toast(note+' ('+msg.slice(0,90)+')','err');
   }
 }
@@ -751,6 +749,14 @@ async function gpuInfo(){
   if(!ad)return{ok:false,why:'Keine geeignete Grafikeinheit gefunden – KI auf dem Gerät ist hier nicht möglich.'};
   const i=ad.info||{};return{ok:true,f16:ad.features.has('shader-f16'),name:[i.vendor,i.architecture,i.device].filter(Boolean).join(' '),maxBuf:ad.limits.maxBufferSize};
 }
+// Varianten gegen GPU-Abstürze auf Android: 1) Worker+16 Bit  2) Hauptthread+16 Bit  3) Hauptthread+32 Bit
+const AI_VARIANTS=[{worker:true,f16:true},{worker:false,f16:true},{worker:false,f16:false}];
+const aiVariant=()=>AI_VARIANTS[Math.min(cfg.aiVariant||0,AI_VARIANTS.length-1)];
+const aiCrash=msg=>/mapAsync|Instance reference|device (was )?lost|DeviceLost|out of memory|OOM/i.test(msg);
+// nach einem GPU-Absturz nächste Variante vormerken; gibt Hinweistext zurück
+function aiNextVariant(){aiEngine=null;aiModelId='';const v=(cfg.aiVariant||0)+1;
+  if(v<AI_VARIANTS.length){cfg.aiVariant=v;save('cfg',cfg);log('KI: nächste Variante '+(v+1));return `Grafik-Absturz. Beim nächsten Versuch nutze ich eine andere Einstellung (Variante ${v+1} von ${AI_VARIANTS.length}). Bitte vorher App und Chrome komplett schließen (aus den zuletzt genutzten Apps wegwischen).`}
+  cfg.ai=false;save('cfg',cfg);log('KI: alle Varianten abgestürzt – KI deaktiviert');return 'Die KI läuft auf diesem Handy im Browser leider nicht stabil (alle drei Varianten abgestürzt). Ich habe sie ausgeschaltet – die Regeln arbeiten weiter.'}
 const aiSubs=new Set();let aiLast=null,aiLoggedPct=-1,aiWorker=null,aiAbort=null;
 // laufendes Laden abbrechen (z. B. bei Modellwechsel)
 function aiCancel(){if(!aiLoading)return;log('KI-Laden abgebrochen');try{aiWorker&&aiWorker.terminate()}catch{}aiWorker=null;if(aiAbort)aiAbort(new Error('abgebrochen'));aiLoading=null;aiLast=null;aiLoggedPct=-1}
@@ -758,7 +764,7 @@ async function getAI(onProgress,allowDownload){
   if(onProgress){aiSubs.add(onProgress);if(aiLast)onProgress(aiLast)} // jeder Wartende bekommt den Fortschritt
   try{
     const g=await gpuInfo();if(!g.ok)throw new Error(g.why);
-    const id=`${AI_MODELS[cfg.aiModel]||AI_MODELS.std}-${g.f16?'q4f16_1':'q4f32_1'}-MLC`;
+    const V=aiVariant(),id=`${AI_MODELS[cfg.aiModel]||AI_MODELS.std}-${g.f16&&V.f16?'q4f16_1':'q4f32_1'}-MLC`;
     if(aiEngine&&aiModelId===id)return aiEngine;
     if(!aiLoading){
       const webllm=await import(WEBLLM_URL);
@@ -766,18 +772,19 @@ async function getAI(onProgress,allowDownload){
       if(!allowDownload&&!(await webllm.hasModelInCache(id,appConfig).catch(()=>false))){const e=new Error('NOT_CACHED');e.notCached=true;throw e}
       aiLoading=(async()=>{
         if(aiEngine){try{await aiEngine.unload()}catch{}aiEngine=null}
-        log(`KI-Modell ${id} wird geladen (GPU: ${g.name||'?'})`);const t0=performance.now();
+        log(`KI-Modell ${id} wird geladen (GPU: ${g.name||'?'}, Variante ${(cfg.aiVariant||0)+1}: ${V.worker?'Worker':'Hauptthread'})`);const t0=performance.now();
         let eng=null;
         // Download bricht auf dem Handy gelegentlich ab – bereits geladene Teile bleiben im Speicher, also einfach erneut versuchen
         for(let attempt=1;!eng;attempt++){
-          const w=new Worker('llm-worker.js?v='+VERSION,{type:'module'});aiWorker=w;
+          const w=V.worker?new Worker('llm-worker.js?v='+VERSION,{type:'module'}):null;aiWorker=w;
           const cancelled=new Promise((_,rej)=>{aiAbort=rej});
           let lastTick=Date.now(),lastP=-1;const wd=setInterval(()=>{const p=aiLast?aiLast.progress:0;if(p!==lastP){lastP=p;lastTick=Date.now()}
             else if(Date.now()-lastTick>90000&&aiAbort){aiAbort(new Error('Download hängt – keine Daten seit 90 s'))}},5000);
-          try{eng=await Promise.race([cancelled,webllm.CreateWebWorkerMLCEngine(w,id,{appConfig,initProgressCallback:r=>{
+          const opts={appConfig,initProgressCallback:r=>{
             aiLast=r;const pct=Math.floor((r.progress||0)*10)*10;if(pct!==aiLoggedPct){aiLoggedPct=pct;log(`KI lädt ${pct} %: ${String(r.text||'').slice(0,80)}`)}
-            aiSubs.forEach(f=>{try{f(r)}catch{}})}})]);clearInterval(wd)}
-          catch(e){clearInterval(wd);try{w.terminate()}catch{}const msg=errMsg(e);log(`KI-Laden Versuch ${attempt}: ${msg}`);
+            aiSubs.forEach(f=>{try{f(r)}catch{}})}};
+          try{eng=await Promise.race([cancelled,w?webllm.CreateWebWorkerMLCEngine(w,id,opts):webllm.CreateMLCEngine(id,opts)]);clearInterval(wd)}
+          catch(e){clearInterval(wd);try{w&&w.terminate()}catch{}const msg=errMsg(e);log(`KI-Laden Versuch ${attempt}: ${msg}`);
             if(msg==='abgebrochen'||attempt>=4||!/network|fetch|Cache|Failed to fetch|aborted|hängt/i.test(msg))throw e;
             aiSubs.forEach(f=>{try{f({progress:aiLast?aiLast.progress:0,text:`Verbindung unterbrochen – neuer Versuch ${attempt+1} …`})}catch{}});
             await sleep(3000)}
@@ -991,7 +998,7 @@ function readSettings(){
   save('cfg',cfg);$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';
 }
 async function aiStatus(){const el=$('#sAiInfo');const g=await gpuInfo();
-  el.textContent=g.ok?`Grafik: ${g.name||'WebGPU verfügbar'}${g.f16?'':' (ohne 16-Bit-Unterstützung, etwas langsamer)'}${aiModelId?` · geladen: ${aiModelId}`:''}`:g.why}
+  el.textContent=g.ok?`Grafik: ${g.name||'WebGPU verfügbar'} · Variante ${(cfg.aiVariant||0)+1} von ${AI_VARIANTS.length}${aiModelId?` · geladen: ${aiModelId}`:''}`:g.why}
 // WebLLM meldet z. B. „Fetching param cache[12/38]: 310MB fetched. 23% completed, 41 secs elapsed.“
 function aiProgressText(t){t=String(t||'');const mb=/(\d+)MB fetched/.exec(t),sec=/(\d+) secs? elapsed/.exec(t),part=/\[(\d+)\/(\d+)\]/.exec(t);
   if(/Loading model from cache/i.test(t))return 'Modell wird aus dem Handy-Speicher gestartet …';
@@ -1033,7 +1040,7 @@ $('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');let wl=nul
     el.textContent='Modell wird geladen …';const t0=performance.now();const j=await aiAnalyze(sample,folderList(),(p,t)=>{el.textContent=/neuer Versuch/.test(t||'')?t:`${Math.round((p||0)*100)} % – ${aiProgressText(t)}`},true);
     el.textContent=`Funktioniert (${((performance.now()-t0)/1000).toFixed(1)} s inkl. Laden): ${[j.datum,j.typ,j.absender,j.betreff,'→ '+j.ordner].filter(Boolean).join(' · ')}`;
     if(!cfg.ai){$('#sAi').checked=true;readSettings()}}
-  catch(e){const msg=errMsg(e);if(/mapAsync|Instance reference|device (was )?lost|out of memory|GPU/i.test(msg)){aiEngine=null;aiModelId=''}el.textContent='Nicht möglich: '+msg+(/mapAsync|Instance reference|lost|memory/i.test(msg)?' – bitte ein kleineres Modell wählen.':/network|Cache|fetch/i.test(msg)?' – Verbindung prüfen und erneut tippen; bereits geladene Teile bleiben erhalten.':'');log('KI-Test: '+msg)}
+  catch(e){const msg=errMsg(e);log('KI-Test: '+msg);el.textContent=aiCrash(msg)?aiNextVariant():'Nicht möglich: '+msg+(/network|Cache|fetch/i.test(msg)?' – Verbindung prüfen und erneut tippen; bereits geladene Teile bleiben erhalten.':'');$('#sAi').checked=cfg.ai}
   finally{try{wl&&wl.release()}catch{}}};
 $('#sLogClear').onclick=()=>{LOG.length=0;save('log',LOG);$('#sLog').textContent=''};
 $('#btnGallery').onclick=()=>{$('#fGal').click()};
