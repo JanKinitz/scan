@@ -279,7 +279,8 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     </select>
     <p class="hint">Der Dokumenttext verlässt das Gerät nicht. Aus dem Internet wird nur einmalig das Modell geladen (von Hugging Face), danach läuft die KI offline. Braucht ein Handy mit WebGPU-fähiger Grafik.</p>
     <p id="sAiInfo" class="mute" style="font-size:14px;margin:8px 0 0"></p>
-    <div class="row"><button id="sAiTest">Modell laden und testen</button></div>
+    <div class="row"><button id="sAiTest">Modell herunterladen und testen</button></div>
+    <p class="hint">Beim ersten Mal: im WLAN, App geöffnet lassen, bis „Funktioniert“ erscheint. Das Display bleibt dabei an.</p>
 
     <h2>Benennung und Ordner</h2>
     <label for="sPattern">Muster für den Dateinamen</label>
@@ -342,7 +343,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27j';
+const VERSION='2026-11-27k';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -611,7 +612,7 @@ async function onFiles(files){
 let stream=null,track=null,torchOn=false;
 async function openCam(){
   cvWorker().catch(()=>{}); // Bildverarbeitung lädt im Hintergrund, während du zielst
-  if(cfg.ai&&!aiEngine&&!aiLoading)setTimeout(()=>getAI().catch(e=>log('KI-Vorladen: '+errMsg(e))),1500); // KI-Modell ebenfalls vorladen
+  if(cfg.ai&&!aiEngine&&!aiLoading)setTimeout(()=>getAI().catch(e=>{if(!e.notCached)log('KI-Vorladen: '+errMsg(e))}),1500); // KI-Modell ebenfalls vorladen
   if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){log('Keine Kamera-API – System-Kamera');$('#fCam').click();return}
   busy('Kamera wird gestartet …');
   try{
@@ -712,6 +713,7 @@ async function aiRefine(m,text){
   }catch(e){
     const msg=errMsg(e);log('KI-Fehler Details: '+msg+(e&&e.stack?' | '+String(e.stack).split('\n').slice(0,3).join(' / '):''));
     let note='KI nicht verfügbar – Regeln verwendet';
+    if(e&&e.notCached){if(meta===m)showMetaInfo('KI-Modell noch nicht heruntergeladen (Einstellungen → KI-Analyse)');return}
     if(/mapAsync|Instance reference|device (was )?lost|DeviceLost|out of memory|OOM|GPU/i.test(msg)){
       aiEngine=null;aiModelId='';const down={big:'std',std:'small'}[cfg.aiModel];
       if(down){cfg.aiModel=down;save('cfg',cfg);note=`KI-Modell war zu groß für das Handy – ab jetzt „${down==='std'?'Standard':'Klein'}“`}
@@ -749,23 +751,33 @@ async function gpuInfo(){
   const i=ad.info||{};return{ok:true,f16:ad.features.has('shader-f16'),name:[i.vendor,i.architecture,i.device].filter(Boolean).join(' '),maxBuf:ad.limits.maxBufferSize};
 }
 const aiSubs=new Set();let aiLast=null,aiLoggedPct=-1;
-async function getAI(onProgress){
+async function getAI(onProgress,allowDownload){
   if(onProgress){aiSubs.add(onProgress);if(aiLast)onProgress(aiLast)} // jeder Wartende bekommt den Fortschritt
   try{
     const g=await gpuInfo();if(!g.ok)throw new Error(g.why);
     const id=`${AI_MODELS[cfg.aiModel]||AI_MODELS.std}-${g.f16?'q4f16_1':'q4f32_1'}-MLC`;
     if(aiEngine&&aiModelId===id)return aiEngine;
     if(!aiLoading){
+      const webllm=await import(WEBLLM_URL);
+      if(!allowDownload&&!(await webllm.hasModelInCache(id).catch(()=>false))){const e=new Error('NOT_CACHED');e.notCached=true;throw e}
       aiLoading=(async()=>{
         if(aiEngine){try{await aiEngine.unload()}catch{}aiEngine=null}
         log(`KI-Modell ${id} wird geladen (GPU: ${g.name||'?'})`);const t0=performance.now();
-        const webllm=await import(WEBLLM_URL);
-        const eng=await webllm.CreateWebWorkerMLCEngine(new Worker('llm-worker.js?v='+VERSION,{type:'module'}),id,{initProgressCallback:r=>{
-          aiLast=r;const pct=Math.floor((r.progress||0)*10)*10;if(pct!==aiLoggedPct){aiLoggedPct=pct;log(`KI lädt ${pct} %: ${String(r.text||'').slice(0,80)}`)}
-          aiSubs.forEach(f=>{try{f(r)}catch{}})}});
+        let eng=null;
+        // Download bricht auf dem Handy gelegentlich ab – bereits geladene Teile bleiben im Speicher, also einfach erneut versuchen
+        for(let attempt=1;!eng;attempt++){
+          const w=new Worker('llm-worker.js?v='+VERSION,{type:'module'});
+          try{eng=await webllm.CreateWebWorkerMLCEngine(w,id,{initProgressCallback:r=>{
+            aiLast=r;const pct=Math.floor((r.progress||0)*10)*10;if(pct!==aiLoggedPct){aiLoggedPct=pct;log(`KI lädt ${pct} %: ${String(r.text||'').slice(0,80)}`)}
+            aiSubs.forEach(f=>{try{f(r)}catch{}})}})}
+          catch(e){try{w.terminate()}catch{}const msg=errMsg(e);log(`KI-Laden Versuch ${attempt}: ${msg}`);
+            if(attempt>=4||!/network|fetch|Cache|Failed to fetch|aborted/i.test(msg))throw e;
+            aiSubs.forEach(f=>{try{f({progress:aiLast?aiLast.progress:0,text:`Verbindung unterbrochen – neuer Versuch ${attempt+1} …`})}catch{}});
+            await sleep(3000)}
+        }
         log(`KI-Modell bereit nach ${Math.round((performance.now()-t0)/1000)} s`);
         aiEngine=eng;aiModelId=id;return eng;
-      })().finally(()=>{aiLoading=null;aiLast=null;aiLoggedPct=-1});
+      })().finally(()=>{aiLoading=null;aiLast=null;aiLoggedPct=-1;setTimeout(applyUpdate,500)});
     }
     return await aiLoading;
   }finally{if(onProgress)aiSubs.delete(onProgress)}
@@ -780,8 +792,8 @@ function compactText(text){
 }
 const AI_SYS='Du ordnest eingescannte deutsche Briefe und Belege für ein privates Archiv ein. Antworte ausschließlich mit einem JSON-Objekt, ohne weiteren Text.';
 const errMsg=e=>e==null?'unbekannter Fehler':typeof e==='string'?e:(e.message||e.reason||(e.toString&&e.toString()!=='[object Object]'?e.toString():'')||(()=>{try{return JSON.stringify(e)}catch{return 'unbekannter Fehler'}})());
-async function aiAnalyze(text,folders,onProgress){
-  const eng=await getAI(r=>onProgress&&onProgress(r.progress,r.text));
+async function aiAnalyze(text,folders,onProgress,allowDownload){
+  const eng=await getAI(r=>onProgress&&onProgress(r.progress,r.text),allowDownload);
   const t0=performance.now();
   const t=compactText(text);
   const prompt=`Ordner zur Auswahl: ${folders.join(' | ')}
@@ -988,12 +1000,13 @@ $('#camGal').onclick=()=>{camBack();$('#fGal').click()};
 $('#camTorch').onclick=async()=>{if(!track)return;torchOn=!torchOn;try{await track.applyConstraints({advanced:[{torch:torchOn}]})}catch(e){torchOn=false;log('Licht: '+e.message)}$('#camTorch').setAttribute('aria-pressed',String(torchOn))};
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&view==='vCam')camBack()});
 $('#sLogCopy').onclick=async()=>{try{await navigator.clipboard.writeText(`Scan ${VERSION}\n${navigator.userAgent}\n`+LOG.join('\n'));toast('Protokoll kopiert','ok')}catch{toast('Kopieren nicht möglich')}};
-$('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');
+$('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');let wl=null;try{wl=await navigator.wakeLock.request('screen')}catch{}
   try{const sample='Telekom Deutschland GmbH\nIhre Rechnung für November 2026\nRechnungsdatum 03.11.2026\nKundennummer 123456\nMobilfunk-Vertrag MagentaMobil M\nGesamtbetrag 39,95 € inkl. MwSt.';
-    el.textContent='Modell wird geladen …';const t0=performance.now();const j=await aiAnalyze(sample,folderList(),p=>{el.textContent=`Modell wird geladen … ${Math.round((p||0)*100)} %`});
+    el.textContent='Modell wird geladen …';const t0=performance.now();const j=await aiAnalyze(sample,folderList(),(p,t)=>{el.textContent=/neuer Versuch/.test(t||'')?t:`Modell wird geladen … ${Math.round((p||0)*100)} %`},true);
     el.textContent=`Funktioniert (${((performance.now()-t0)/1000).toFixed(1)} s inkl. Laden): ${[j.datum,j.typ,j.absender,j.betreff,'→ '+j.ordner].filter(Boolean).join(' · ')}`;
     if(!cfg.ai){$('#sAi').checked=true;readSettings()}}
-  catch(e){const msg=errMsg(e);if(/mapAsync|Instance reference|device (was )?lost|out of memory|GPU/i.test(msg)){aiEngine=null;aiModelId=''}el.textContent='Nicht möglich: '+msg+(/mapAsync|Instance reference|lost|memory/i.test(msg)?' – bitte ein kleineres Modell wählen.':'');log('KI-Test: '+msg)}};
+  catch(e){const msg=errMsg(e);if(/mapAsync|Instance reference|device (was )?lost|out of memory|GPU/i.test(msg)){aiEngine=null;aiModelId=''}el.textContent='Nicht möglich: '+msg+(/mapAsync|Instance reference|lost|memory/i.test(msg)?' – bitte ein kleineres Modell wählen.':/network|Cache|fetch/i.test(msg)?' – Verbindung prüfen und erneut tippen; bereits geladene Teile bleiben erhalten.':'');log('KI-Test: '+msg)}
+  finally{try{wl&&wl.release()}catch{}}};
 $('#sLogClear').onclick=()=>{LOG.length=0;save('log',LOG);$('#sLog').textContent=''};
 $('#btnGallery').onclick=()=>{$('#fGal').click()};
 $('#btnSync').onclick=()=>syncAll(true);
@@ -1052,7 +1065,7 @@ async function checkUpdate(force){
   catch(e){log('Update-Prüfung: '+e.message)}
 }
 function applyUpdate(){ // nur neu laden, wenn gerade nichts in Arbeit ist (Startseite, kein Upload, kein Dialog)
-  if(!updatePending||view!=='vHome'||!$('#busy').hidden||$('#docDlg').open||syncing)return;
+  if(!updatePending||view!=='vHome'||!$('#busy').hidden||$('#docDlg').open||syncing||aiLoading)return;
   updatePending=false;toast('Neue Version wird geladen …');setTimeout(()=>location.reload(),700);
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkUpdate()});
