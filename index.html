@@ -221,6 +221,10 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     </div>
     <label for="mtSender">Absender</label>
     <input id="mtSender" autocomplete="off">
+    <div class="grid2">
+      <div><label for="mtSubject">Betreff</label><input id="mtSubject" autocomplete="off"></div>
+      <div><label for="mtFormat">Papierformat</label><select id="mtFormat"><option value="auto">Automatisch</option><option>A4</option><option>A5</option><option>A6</option><option>Letter</option><option>DIN lang</option><option>Visitenkarte</option></select></div>
+    </div>
     <datalist id="typeList"></datalist>
     <details><summary>Erkannter Text</summary><pre id="mtText"></pre></details>
     <button class="pri wide" id="mtSave">Speichern</button>
@@ -254,18 +258,29 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     <h2>Scannen</h2>
     <label for="sFormat">Seitenformat</label>
     <select id="sFormat">
-      <option value="auto">Automatisch: A4, wenn die Proportionen passen</option>
+      <option value="auto">Automatisch erkennen (A4, A5, A6, Letter, DIN lang …)</option>
       <option value="a4">Immer auf A4 strecken</option>
-      <option value="orig">Originalproportionen behalten</option>
     </select>
     <label class="chk"><input type="checkbox" id="sReview"> Ecken nach jeder Aufnahme prüfen</label>
     <label for="sQual">Bildqualität im PDF: <span id="sQualV"></span></label>
     <input type="range" id="sQual" min="0.5" max="0.95" step="0.05" style="padding:0">
 
+    <h2>KI-Analyse</h2>
+    <label class="chk"><input type="checkbox" id="sAi"> KI ordnet ein und benennt – läuft komplett auf dem Handy</label>
+    <label for="sAiModel">Modell</label>
+    <select id="sAiModel">
+      <option value="small">Klein – schnell, ca. 0,3 GB Download</option>
+      <option value="std">Standard – ca. 0,9 GB Download</option>
+      <option value="big">Genau – ca. 1,8 GB, nur für starke Handys</option>
+    </select>
+    <p class="hint">Der Dokumenttext verlässt das Gerät nicht. Aus dem Internet wird nur einmalig das Modell geladen (von Hugging Face), danach läuft die KI offline. Braucht ein Handy mit WebGPU-fähiger Grafik.</p>
+    <p id="sAiInfo" class="mute" style="font-size:14px;margin:8px 0 0"></p>
+    <div class="row"><button id="sAiTest">Modell laden und testen</button></div>
+
     <h2>Benennung und Ordner</h2>
     <label for="sPattern">Muster für den Dateinamen</label>
     <input id="sPattern" spellcheck="false">
-    <p class="hint">Platzhalter: {datum} {typ} {absender} {ordner}</p>
+    <p class="hint">Platzhalter: {datum} {typ} {absender} {betreff} {ordner}</p>
     <label for="sDateSrc">Datum im Namen</label>
     <select id="sDateSrc"><option value="doc">Datum aus dem Dokument (sonst Scandatum)</option><option value="scan">Immer das Scandatum</option></select>
     <label for="sCats">Ordner und ihre Stichwörter</label>
@@ -310,10 +325,10 @@ Auto: fahrzeug, kfz, kennzeichen, tüv, hauptuntersuchung, werkstatt, inspektion
 Schule und Kita: schule, kita, kindergarten, klasse, klassenlehrerin, elternbrief, liebe eltern, zeugnis, schuljahr, elternabend, hort, ausflug
 Kaufbelege und Garantie: kassenbon, quittung, garantie, gewährleistung, bestellung, lieferschein, kaufbeleg, bestellnummer, artikelnummer, retoure`;
 
-const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{absender}',dateSrc:'doc',cats:DEFAULT_CATS};
+const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{absender}_{betreff}',dateSrc:'doc',cats:DEFAULT_CATS,ai:false,aiModel:'std'};
 const load=(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v??d}catch{return d}};
 const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};
-let cfg={...DEF,...load('cfg',{})};if(!cfg.clientId)cfg.clientId=DEF.clientId;
+let cfg={...DEF,...load('cfg',{})};if(!cfg.clientId)cfg.clientId=DEF.clientId;if(cfg.pattern==='{datum}_{typ}_{absender}')cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';
 let learn=load('learn',{});   // absender-schlüssel -> ordner
 let tok=load('tok',{});
 
@@ -323,7 +338,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27d';
+const VERSION='2026-11-27e';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -398,11 +413,26 @@ async function detectDoc(canvas){
 }
 
 /* ---------- Entzerren ---------- */
+// Seitenverhältnis eines fotografierten Rechtecks (Zhang & He, "Whiteboard scanning")
+function perspRatio(c,W,H){
+  const[tl,tr,br,bl]=c,D=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+  const simple=(D(tl,tr)+D(bl,br))/(D(tl,bl)+D(tr,br));
+  const u0=W/2,v0=H/2,m1=[tl.x,tl.y,1],m2=[tr.x,tr.y,1],m3=[bl.x,bl.y,1],m4=[br.x,br.y,1];
+  const cr=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],dt=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const k2=dt(cr(m1,m4),m3)/dt(cr(m2,m4),m3),k3=dt(cr(m1,m4),m2)/dt(cr(m3,m4),m2);
+  if(!isFinite(k2)||!isFinite(k3)||(Math.abs(k2-1)<.02&&Math.abs(k3-1)<.02))return simple;
+  const n2=m2.map((v,i)=>k2*v-m1[i]),n3=m3.map((v,i)=>k3*v-m1[i]);
+  const f2=-((n2[0]*n3[0]-(n2[0]*n3[2]+n2[2]*n3[0])*u0+n2[2]*n3[2]*u0*u0)+(n2[1]*n3[1]-(n2[1]*n3[2]+n2[2]*n3[1])*v0+n2[2]*n3[2]*v0*v0))/(n2[2]*n3[2]);
+  const f=Math.sqrt(f2),M=Math.max(W,H);
+  if(!(f2>0)||f<M*.3||f>M*4)return simple;
+  const Q=n=>((n[0]-u0*n[2])/f)**2+((n[1]-v0*n[2])/f)**2+n[2]**2;
+  const r=Math.sqrt(Q(n2)/Q(n3));return isFinite(r)&&r>0?r:simple;
+}
 async function warpPage(p){
-  const[tl,tr,br,bl]=p.corners;const D=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
-  const w=Math.max(D(tl,tr),D(bl,br)),h=Math.max(D(tl,bl),D(tr,br)),land=w>h,r=Math.max(w,h)/Math.max(1,Math.min(w,h));
-  const toA4=cfg.format==='a4'||(cfg.format==='auto'&&r>1.22&&r<1.62);
-  let W,H;if(toA4){W=land?A4H:A4W;H=land?A4W:A4H}else{const s=A4H/Math.max(w,h);W=Math.max(1,Math.round(w*s));H=Math.max(1,Math.round(h*s))}
+  const wh=perspRatio(p.corners,p.src.width,p.src.height),land=wh>1;let r=land?wh:1/wh;
+  if(cfg.format==='a4'||Math.abs(r-Math.SQRT2)/Math.SQRT2<.035)r=Math.SQRT2; // A-Formate exakt
+  const L=A4H,S=Math.max(1,Math.round(L/r));const W=land?L:S,H=land?S:L;
+  log(`Seitenverhältnis ${r.toFixed(3)}${r===Math.SQRT2?' (DIN A)':''}`);
   const id=imgData(p.src);
   p.warped=toCanvas(await cvCall('warp',[id,p.corners.map(c=>({x:c.x,y:c.y})),W,H],[id.data.buffer]));p.auto=null;
 }
@@ -494,7 +524,7 @@ function analyze(text,cats,learned){
 }
 const cleanPart=s=>String(s||'').replace(/[\\/:*?"<>|#%{}~]/g,'').trim().replace(/\s+/g,'-');
 function buildName(pattern,m){
-  const v={datum:m.date,typ:m.type,absender:m.sender,ordner:(m.folder||'').split('/').pop()};
+  const v={datum:m.date,typ:m.type,absender:m.sender,betreff:m.subject,ordner:(m.folder||'').split('/').pop()};
   let s=String(pattern||'{datum}_{typ}_{absender}').replace(/\{(\w+)\}/g,(_,k)=>cleanPart(v[k]));
   s=s.replace(/_{2,}/g,'_').replace(/^[_\- .]+|[_\- .]+$/g,'');
   return s||'Scan_'+(m.date||'');
@@ -611,28 +641,109 @@ async function runAnalysis(){
       p.text=data.text||'';p.words=(data.words||[]).filter(x=>x.confidence>35&&x.text.trim()).map(x=>({t:x.text,b:x.bbox}));p.ocrFor=p.out;
     }
   }catch(e){console.error(e);failed=true;toast('Texterkennung nicht möglich: '+e.message,'err')}
-  finally{ocrLog=null;unbusy()}
+  finally{ocrLog=null}
+  pages.forEach(p=>{p.fmt=estimateFormat(p);log(`Format Seite: ${p.fmt.id} (${Math.round(p.fmt.w)}×${Math.round(p.fmt.h)} mm${p.fmt.est?', Text-Schätzung '+Math.round(p.fmt.est)+' mm':''})`)});
   const text=pages.map(p=>p.text||'').join('\n\n');
-  const a=analyze(text,parseCats(cfg.cats),learn);
+  const cats=parseCats(cfg.cats),a=analyze(text,cats,learn);a.subject='';
+  if(cfg.ai&&text.trim().length>20){
+    try{const j=await aiAnalyze(text,folderList());
+      const s=String(j.absender||'').trim();if(s&&s.length<60)a.sender=s.replace(/\s+(GmbH|AG|SE|KG|e\.\s?V\.|mbH|UG)(\s.*)?$/i,'');
+      const t=String(j.typ||'').trim();if(t&&t.length<40)a.type=t;
+      if(/^\d{4}-\d{2}-\d{2}$/.test(j.datum||'')){const d=new Date(j.datum);if(d>new Date(1990,0,1)&&d<new Date(Date.now()+60*864e5))a.date=j.datum}
+      a.subject=String(j.betreff||'').trim().split(/\s+/).slice(0,5).join(' ');
+      const f=folderList().find(x=>x.toLowerCase()===String(j.ordner||'').trim().toLowerCase());if(f)a.folder=f;
+      a.how='KI';
+      const key=a.sender.toLowerCase();if(key&&learn[key]){a.folder=learn[key];a.how='gelernt'}
+    }catch(e){console.error(e);toast('KI-Analyse nicht möglich: '+e.message+' – Regeln verwendet.','err')}
+  }
+  unbusy();
   const date=cfg.dateSrc==='scan'||!a.date?today():a.date;
   meta={...a,date,suggested:a.folder,text,nameEdited:false};
-  $('#mtThumb').src=pages[0].thumb;$('#mtSender').value=a.sender;$('#mtType').value=a.type;$('#mtDate').value=date;
+  $('#mtThumb').src=pages[0].thumb;$('#mtSender').value=a.sender;$('#mtType').value=a.type;$('#mtSubject').value=a.subject||'';$('#mtDate').value=date;
+  const f0=pages[0].fmt;$('#mtFormat').value='auto';$('#mtFormat').options[0].textContent=`Automatisch (${f0.id==='Geschätzt'?`ca. ${Math.round(f0.w)}×${Math.round(f0.h)} mm`:f0.id})`;
   folderOptions(a.folder);$('#mtText').textContent=text.trim()||'(kein Text erkannt)';
   const info=[];info.push(failed?'Ohne Texterkennung':`${text.trim().split(/\s+/).filter(Boolean).length} Wörter erkannt`);
+  if(a.how==='KI')info.push('von der KI eingeordnet');
   info.push(a.date&&cfg.dateSrc!=='scan'?'Datum aus dem Dokument':'Scandatum verwendet');
   if(a.how==='gelernt')info.push('Ordner wie beim letzten Mal');else if(a.folder==='Sonstiges')info.push('kein passender Ordner erkannt');
   info.push(`${n} ${n>1?'Seiten':'Seite'}`);$('#mtInfo').textContent=info.join(' · ');
   refreshName();nav('vMeta');
 }
+
+/* ---------- Papierformat schätzen ---------- */
+const FORMATS={A4:[210,297],A5:[148,210],A6:[105,148],Letter:[215.9,279.4],'DIN lang':[99,210],Visitenkarte:[55,85]};
+function estimateFormat(p){
+  const pw=p.out.width,ph=p.out.height,land=pw>ph,r=Math.max(pw,ph)/Math.min(pw,ph),shortPx=Math.min(pw,ph);
+  if(cfg.format==='a4')return{id:'A4',w:210,h:297,land};
+  // Schriftgröße als Maßstab: typische Wort-Höhe im Fließtext ≈ 3 mm (10–12 pt)
+  const hs=(p.words||[]).filter(w=>/[A-Za-zÄÖÜäöüß]{3,}/.test(w.t)).map(w=>w.b.y1-w.b.y0).filter(h=>h>3).sort((a,b)=>a-b);
+  const est=hs.length>=8?3.0*shortPx/hs[hs.length>>1]:null;
+  if(Math.abs(r-Math.SQRT2)/Math.SQRT2<.04){const id=est==null||est>=176?'A4':est>=125?'A5':'A6';return{id,w:FORMATS[id][0],h:FORMATS[id][1],land,est}}
+  for(const id of['Letter','DIN lang','Visitenkarte']){const[w,h]=FORMATS[id];if(Math.abs(r-h/w)/(h/w)<.05&&(est==null?id==='Letter':est/w>.7&&est/w<1.4))return{id,w,h,land,est}}
+  const w=est!=null?Math.min(297,Math.max(40,est)):210;return{id:'Geschätzt',w,h:w*r,land,est};
+}
+function pageMM(p){
+  const sel=$('#mtFormat').value,f=sel!=='auto'&&FORMATS[sel]?{w:FORMATS[sel][0],h:FORMATS[sel][1]}:(p.fmt||estimateFormat(p));
+  const land=p.out.width>p.out.height;return land?[f.h,f.w]:[f.w,f.h];
+}
+
+/* ---------- KI-Analyse auf dem Gerät (WebLLM, WebGPU) ---------- */
+const WEBLLM_URL='https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.87/+esm';
+const AI_MODELS={small:'Qwen2.5-0.5B-Instruct',std:'Qwen2.5-1.5B-Instruct',big:'Qwen2.5-3B-Instruct'};
+let aiEngine=null,aiLoading=null,aiModelId='';
+function folderList(){const set=new Set(parseCats(cfg.cats).map(c=>c.name));Object.values(learn).forEach(f=>set.add(f));(cfg.extraFolders||[]).forEach(f=>set.add(f));set.add('Sonstiges');return[...set]}
+async function gpuInfo(){
+  if(!navigator.gpu)return{ok:false,why:'Dieser Browser bietet kein WebGPU – KI auf dem Gerät ist hier nicht möglich.'};
+  const ad=await navigator.gpu.requestAdapter().catch(()=>null);
+  if(!ad)return{ok:false,why:'Keine geeignete Grafikeinheit gefunden – KI auf dem Gerät ist hier nicht möglich.'};
+  const i=ad.info||{};return{ok:true,f16:ad.features.has('shader-f16'),name:[i.vendor,i.architecture,i.device].filter(Boolean).join(' '),maxBuf:ad.limits.maxBufferSize};
+}
+async function getAI(onProgress){
+  const g=await gpuInfo();if(!g.ok)throw new Error(g.why);
+  const id=`${AI_MODELS[cfg.aiModel]||AI_MODELS.std}-${g.f16?'q4f16_1':'q4f32_1'}-MLC`;
+  if(aiEngine&&aiModelId===id)return aiEngine;
+  if(aiLoading)return aiLoading;
+  aiLoading=(async()=>{
+    if(aiEngine){try{await aiEngine.unload()}catch{}aiEngine=null}
+    log(`KI-Modell ${id} (GPU: ${g.name||'?'})`);
+    const webllm=await import(WEBLLM_URL);
+    const eng=await webllm.CreateWebWorkerMLCEngine(new Worker('llm-worker.js?v='+VERSION,{type:'module'}),id,{initProgressCallback:r=>onProgress&&onProgress(r)});
+    aiEngine=eng;aiModelId=id;return eng;
+  })();
+  try{return await aiLoading}finally{aiLoading=null}
+}
+const AI_SYS='Du ordnest eingescannte deutsche Dokumente für ein privates Archiv ein. Antworte ausschließlich mit einem JSON-Objekt, ohne weiteren Text.';
+async function aiAnalyze(text,folders){
+  const eng=await getAI(r=>busy('KI-Modell wird geladen … (einmalig, WLAN empfohlen)',r.progress));
+  busy('KI analysiert das Dokument …');const t0=performance.now();
+  const t=text.replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').slice(0,2400);
+  const prompt=`Ordner zur Auswahl: ${folders.join(' | ')}
+
+Dokumenttext (per Texterkennung, kann Fehler enthalten):
+"""
+${t}
+"""
+
+Gib ein JSON-Objekt mit genau diesen Feldern zurück:
+"absender": Firma, Behörde, Schule oder Person, von der das Dokument stammt – kurzer Name ohne Rechtsform und ohne Adresse
+"typ": Art des Dokuments in einem Wort, z. B. Rechnung, Mahnung, Vertrag, Bescheid, Bescheinigung, Kontoauszug, Gehaltsabrechnung, Arztbrief, Rezept, Zeugnis, Elternbrief, Angebot, Quittung, Brief
+"datum": Ausstellungsdatum des Dokuments als JJJJ-MM-TT, sonst ""
+"betreff": worum es konkret geht, 2 bis 4 Wörter
+"ordner": genau ein Eintrag aus der Ordnerliste oben`;
+  const res=await eng.chat.completions.create({messages:[{role:'system',content:AI_SYS},{role:'user',content:prompt}],temperature:0.1,max_tokens:180,response_format:{type:'json_object'}});
+  const raw=(res.choices[0].message.content||'').trim();log(`KI (${Math.round(performance.now()-t0)} ms): ${raw.slice(0,240)}`);
+  const i=raw.indexOf('{'),j=raw.lastIndexOf('}');if(i<0||j<i)throw new Error('unverständliche Antwort');
+  return JSON.parse(raw.slice(i,j+1));
+}
 function curFolder(){const v=$('#mtFolder').value;return v==='__new'?cleanFolder($('#mtNewFolder').value)||'Sonstiges':v}
-function refreshName(){if(!meta)return;if(!meta.nameEdited)$('#mtName').value=buildName(cfg.pattern,{date:$('#mtDate').value,type:$('#mtType').value,sender:$('#mtSender').value,folder:curFolder()});
+function refreshName(){if(!meta)return;if(!meta.nameEdited)$('#mtName').value=buildName(cfg.pattern,{date:$('#mtDate').value,type:$('#mtType').value,sender:$('#mtSender').value,subject:$('#mtSubject').value,folder:curFolder()});
   $('#mtPath').textContent=['OneDrive',cfg.base,curFolder()].filter(Boolean).join(' › ')}
 
 /* ---------- PDF ---------- */
 async function makePdf(name,m){
   await loadScript(PDF_URL);const{jsPDF}=window.jspdf;let doc=null;
   for(const p of pages){
-    const land=p.out.width>p.out.height,wmm=land?297:210,hmm=+(wmm*p.out.height/p.out.width).toFixed(2);
+    const land=p.out.width>p.out.height,[wmm,hmm]=pageMM(p).map(v=>+v.toFixed(2));
     if(!doc)doc=new jsPDF({unit:'mm',format:[wmm,hmm],orientation:land?'l':'p',compress:true});else doc.addPage([wmm,hmm],land?'l':'p');
     const bg=document.createElement('canvas');bg.width=p.out.width;bg.height=p.out.height;const x=bg.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,bg.width,bg.height);x.drawImage(p.out,0,0);
     doc.addImage(bg.toDataURL('image/jpeg',cfg.quality),'JPEG',0,0,wmm,hmm,undefined,'FAST');
@@ -758,7 +869,7 @@ async function openDoc(id){
   $('#dlgTitle').textContent=d.name+'.pdf';$('#dlgSub').textContent=`${[cfg.base,d.folder].filter(Boolean).join(' › ')} · ${d.pages} S. · ${d.size?Math.round(d.size/1024)+' KB':''}${d.err&&d.status==='error'?' · '+d.err:''}`;
   const acts=[];
   if(d.pdf){acts.push(['share','Teilen …'],['dl','Herunterladen'])}
-  if(d.webUrl)acts.push(['open','In OneDrive öffnen']);
+  if(d.webUrl)acts.push(['open','In der OneDrive-App öffnen']);
   if(d.pdf&&d.status!=='uploading')acts.push(['up',d.status==='uploaded'?'Erneut hochladen':'Hochladen']);
   acts.push(['del','Auf diesem Gerät löschen'],['close','Schließen']);
   $('#dlgActs').innerHTML=acts.map(([k,l])=>k==='open'?`<button data-a="open" class="pri">${l}</button>`:`<button data-a="${k}">${l}</button>`).join('');
@@ -766,7 +877,7 @@ async function openDoc(id){
     const file=d.pdf?new File([d.pdf],d.name+'.pdf',{type:'application/pdf'}):null;
     if(a==='share'){try{if(navigator.canShare&&navigator.canShare({files:[file]}))await navigator.share({files:[file],title:d.name});else toast('Teilen wird hier nicht unterstützt – nutze „Herunterladen“.')}catch{}}
     else if(a==='dl'){const u=URL.createObjectURL(file),l=document.createElement('a');l.href=u;l.download=file.name;document.body.append(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),4000)}
-    else if(a==='open'){window.open(d.webUrl,'_blank','noopener')}
+    else if(a==='open'){openOneDrive(d.webUrl)}
     else if(a==='up'){d.status='pending';await putDoc(d);dlg.close();syncAll(true)}
     else if(a==='del'){if(confirm(`„${d.name}“ auf diesem Gerät löschen?${d.status==='uploaded'?' Die Datei in OneDrive bleibt erhalten.':' Sie ist noch nicht hochgeladen!'}`)){await delDoc(d.id);dlg.close();renderList()}}
     else dlg.close()};
@@ -778,14 +889,21 @@ function openSettings(){
   $('#sClient').value=cfg.clientId;$('#sTenant').value=cfg.tenant;$('#sRedirect').textContent=redirectUri();$('#sBase').value=cfg.base;
   $('#sAuto').checked=cfg.autoUpload;$('#sDrop').checked=cfg.dropLocal;$('#sFormat').value=cfg.format;$('#sReview').checked=cfg.review;
   $('#sQual').value=cfg.quality;$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';$('#sPattern').value=cfg.pattern;$('#sDateSrc').value=cfg.dateSrc;$('#sCats').value=cfg.cats;
-  $('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
+  $('#sAi').checked=cfg.ai;$('#sAiModel').value=cfg.aiModel;aiStatus();$('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
   (async()=>{try{const e=await navigator.storage.estimate();const n=(await allDocs()).length;$('#sStore').textContent=`${n} Scans, ca. ${(e.usage/1048576).toFixed(1)} MB belegt (inkl. Texterkennungs- und Bildverarbeitungsdaten).`}catch{$('#sStore').textContent=''}})();
   nav('vSet');
 }
 function readSettings(){
   cfg.clientId=$('#sClient').value.trim();cfg.tenant=$('#sTenant').value;cfg.base=cleanFolder($('#sBase').value);cfg.autoUpload=$('#sAuto').checked;cfg.dropLocal=$('#sDrop').checked;
-  cfg.format=$('#sFormat').value;cfg.review=$('#sReview').checked;cfg.quality=+$('#sQual').value;cfg.pattern=$('#sPattern').value.trim()||DEF.pattern;cfg.dateSrc=$('#sDateSrc').value;cfg.cats=$('#sCats').value;
+  cfg.format=$('#sFormat').value;cfg.review=$('#sReview').checked;cfg.quality=+$('#sQual').value;cfg.pattern=$('#sPattern').value.trim()||DEF.pattern;cfg.dateSrc=$('#sDateSrc').value;cfg.cats=$('#sCats').value;cfg.ai=$('#sAi').checked;cfg.aiModel=$('#sAiModel').value;
   save('cfg',cfg);$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';
+}
+async function aiStatus(){const el=$('#sAiInfo');const g=await gpuInfo();
+  el.textContent=g.ok?`Grafik: ${g.name||'WebGPU verfügbar'}${g.f16?'':' (ohne 16-Bit-Unterstützung, etwas langsamer)'}${aiModelId?` · geladen: ${aiModelId}`:''}`:g.why}
+function openOneDrive(url){
+  // Auf Android direkt die OneDrive-App ansteuern; ohne App geht es im Browser weiter
+  if(/Android/i.test(navigator.userAgent)){const u=new URL(url);location.href=`intent://${u.host}${u.pathname}${u.search}#Intent;scheme=https;package=com.microsoft.skydrive;S.browser_fallback_url=${encodeURIComponent(url)};end`}
+  else window.open(url,'_blank','noopener');
 }
 function closeSettings(){readSettings();renderOd();nav('vHome')}
 
@@ -797,6 +915,12 @@ $('#camGal').onclick=()=>{camBack();$('#fGal').click()};
 $('#camTorch').onclick=async()=>{if(!track)return;torchOn=!torchOn;try{await track.applyConstraints({advanced:[{torch:torchOn}]})}catch(e){torchOn=false;log('Licht: '+e.message)}$('#camTorch').setAttribute('aria-pressed',String(torchOn))};
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&view==='vCam')camBack()});
 $('#sLogCopy').onclick=async()=>{try{await navigator.clipboard.writeText(`Scan ${VERSION}\n${navigator.userAgent}\n`+LOG.join('\n'));toast('Protokoll kopiert','ok')}catch{toast('Kopieren nicht möglich')}};
+$('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');
+  try{const sample='Telekom Deutschland GmbH\nIhre Rechnung für November 2026\nRechnungsdatum 03.11.2026\nKundennummer 123456\nMobilfunk-Vertrag MagentaMobil M\nGesamtbetrag 39,95 € inkl. MwSt.';
+    const t0=performance.now();const j=await aiAnalyze(sample,folderList());unbusy();
+    el.textContent=`Funktioniert (${((performance.now()-t0)/1000).toFixed(1)} s inkl. Laden): ${[j.datum,j.typ,j.absender,j.betreff,'→ '+j.ordner].filter(Boolean).join(' · ')}`;
+    if(!cfg.ai){$('#sAi').checked=true;readSettings()}}
+  catch(e){unbusy();el.textContent='Nicht möglich: '+e.message;log('KI-Test: '+e.message)}};
 $('#sLogClear').onclick=()=>{LOG.length=0;save('log',LOG);$('#sLog').textContent=''};
 $('#btnGallery').onclick=()=>{$('#fGal').click()};
 $('#btnSync').onclick=()=>syncAll(true);
@@ -820,7 +944,7 @@ $('#pgAdd').onclick=openCam;
 $('#pgAddGal').onclick=()=>$('#fGal').click();
 $('#pgDone').onclick=runAnalysis;
 $('#mtBack').onclick=()=>{renderPages();nav('vPages')};
-['mtDate','mtType','mtSender'].forEach(id=>$('#'+id).addEventListener('input',refreshName));
+['mtDate','mtType','mtSender','mtSubject'].forEach(id=>$('#'+id).addEventListener('input',refreshName));
 $('#mtFolder').onchange=()=>{const n=$('#mtFolder').value==='__new';$('#mtNewFolder').hidden=!n;if(n)$('#mtNewFolder').focus();refreshName()};
 $('#mtNewFolder').oninput=refreshName;
 $('#mtName').oninput=()=>{meta.nameEdited=true};
