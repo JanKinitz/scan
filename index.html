@@ -270,18 +270,17 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     <input type="range" id="sQual" min="0.5" max="0.95" step="0.05" style="padding:0">
 
     <h2>KI-Analyse</h2>
-    <label class="chk"><input type="checkbox" id="sAi"> KI ordnet ein und benennt – läuft komplett auf dem Handy</label>
+    <label class="chk"><input type="checkbox" id="sAi"> KI ordnet ein und benennt (über GitHub Models)</label>
     <label for="sAiModel">Modell</label>
-    <select id="sAiModel">
-      <option value="small">Klein – schnell, ca. 0,3 GB Download</option>
-      <option value="std">Standard – ca. 0,9 GB Download (empfohlen)</option>
-      <option value="big">Groß – ca. 1,8 GB, für die meisten Handys zu groß</option>
-    </select>
-    <p class="hint">Der Dokumenttext verlässt das Gerät nicht. Aus dem Internet wird nur einmalig das Modell geladen (von Hugging Face), danach läuft die KI offline. Braucht ein Handy mit WebGPU-fähiger Grafik.</p>
-    <p id="sAiInfo" class="mute" style="font-size:14px;margin:8px 0 0"></p>
-    <div class="row"><button id="sAiTest">Modell herunterladen und testen</button><button id="sAiClear">KI-Modelle vom Handy löschen</button></div>
-    <p id="sAiDiag" class="mute" style="font-size:14px;margin:8px 0 0"></p>
-    <p class="hint">Beim ersten Mal: im WLAN, App geöffnet lassen, bis „Funktioniert“ erscheint. Das Display bleibt dabei an.</p>
+    <select id="sAiModel"></select>
+    <label for="sAiUrl">Adresse deiner Azure-Funktion</label>
+    <input id="sAiUrl" placeholder="https://….azurewebsites.net/api/analyze" autocomplete="off" spellcheck="false">
+    <label class="chk"><input type="checkbox" id="sRedact"> Persönliches vor dem Senden schwärzen (Empfänger, IBAN, Nummern, Kontakt)</label>
+    <label for="sRedactNames">Weitere Namen schwärzen (z. B. Familienmitglieder, mit Komma getrennt)</label>
+    <input id="sRedactNames" autocomplete="off">
+    <p class="hint">Gesendet wird nur der gekürzte, geschwärzte Text – kein Bild. Er geht über deine eigene Azure-Funktion an GitHub Models (Microsoft) und wird dort laut GitHub nicht zum Training genutzt. Ohne Netz oder bei Fehlern nimmt die App die Regeln.</p>
+    <p id="sAiInfo" class="mute" style="font-size:14px;margin:8px 0 0;overflow-wrap:anywhere"></p>
+    <div class="row"><button id="sAiTest">Verbindung testen</button><button id="sAiPreview">Was sieht die KI?</button></div>
 
     <h2>Benennung und Ordner</h2>
     <label for="sPattern">Muster für den Dateinamen</label>
@@ -331,11 +330,11 @@ Auto: fahrzeug, kfz, kennzeichen, tüv, hauptuntersuchung, werkstatt, inspektion
 Schule und Kita: schule, kita, kindergarten, klasse, klassenlehrerin, elternbrief, liebe eltern, zeugnis, schuljahr, elternabend, hort, ausflug
 Kaufbelege und Garantie: kassenbon, quittung, garantie, gewährleistung, bestellung, lieferschein, kaufbeleg, bestellnummer, artikelnummer, retoure`;
 
-const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{betreff}_{absender}',dateSrc:'doc',cats:DEFAULT_CATS,ai:false,aiModel:'std'};
+const AI_MODEL_IDS=['openai/gpt-4o-mini','openai/gpt-4.1-mini','openai/gpt-4.1-nano'];
+const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{betreff}_{absender}',dateSrc:'doc',cats:DEFAULT_CATS,ai:false,aiModel:'openai/gpt-4o-mini',aiUrl:'',redact:true,redactNames:''};
 const load=(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v??d}catch{return d}};
 const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};
-let cfg={...DEF,...load('cfg',{})};if(!cfg.clientId)cfg.clientId=DEF.clientId;if(['{datum}_{typ}_{absender}','{datum}_{typ}_{absender}_{betreff}'].includes(cfg.pattern))cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';if(!cfg.aiMig2){cfg.aiMig2=true;if(cfg.ai&&!(cfg.aiVariant>0))cfg.aiVariant=1;save('cfg',cfg)} // Variante 1 (Worker) ist auf dem Handy bereits abgestürzt
-if(cfg.aiModel==='big'&&!cfg.aiMig1){cfg.aiModel='std';cfg.aiMig1=true;save('cfg',cfg)} // großes Modell lief auf dem Handy nicht stabil
+let cfg={...DEF,...load('cfg',{})};if(!AI_MODEL_IDS.includes(cfg.aiModel))cfg.aiModel=DEF.aiModel;if(!cfg.aiUrl)cfg.ai=false;if(!cfg.clientId)cfg.clientId=DEF.clientId;if(['{datum}_{typ}_{absender}','{datum}_{typ}_{absender}_{betreff}'].includes(cfg.pattern))cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';
 let learn=load('learn',{});   // absender-schlüssel -> ordner
 let tok=load('tok',{});
 
@@ -345,7 +344,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27p';
+const VERSION='2026-11-27q';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -614,7 +613,6 @@ async function onFiles(files){
 let stream=null,track=null,torchOn=false;
 async function openCam(){
   cvWorker().catch(()=>{}); // Bildverarbeitung lädt im Hintergrund, während du zielst
-  if(cfg.ai&&!aiEngine&&!aiLoading)setTimeout(()=>getAI().catch(e=>{if(!e.notCached)log('KI-Vorladen: '+errMsg(e))}),1500); // KI-Modell ebenfalls vorladen
   if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){log('Keine Kamera-API – System-Kamera');$('#fCam').click();return}
   busy('Kamera wird gestartet …');
   try{
@@ -690,7 +688,7 @@ async function runAnalysis(){
     a.date&&cfg.dateSrc!=='scan'?'Datum aus dem Dokument':'Scandatum verwendet',
     a.how==='gelernt'?'Ordner wie beim letzten Mal':a.folder==='Sonstiges'?'kein passender Ordner erkannt':'',
     `${n} ${n>1?'Seiten':'Seite'}`].filter(Boolean);
-  showMetaInfo(cfg.ai&&text.trim().length>20?'KI prüft im Hintergrund …':'');
+  showMetaInfo(cfg.ai&&text.trim().length>20?'KI analysiert …':'');
   refreshName();nav('vMeta');
   if(cfg.ai&&text.trim().length>20)aiRefine(meta,text);
 }
@@ -698,8 +696,7 @@ function showMetaInfo(extra){if(meta)$('#mtInfo').textContent=[...(meta.info||[]
 // KI läuft im Hintergrund und ergänzt nur Felder, die du noch nicht selbst geändert hast
 async function aiRefine(m,text){
   try{
-    const j=await aiAnalyze(text,folderList(),(p,t)=>{if(meta===m)showMetaInfo(/cache|Cache|Loading model from cache/.test(t||'')?`KI-Modell startet … ${Math.round((p||0)*100)} %`:`KI-Modell wird heruntergeladen … ${Math.round((p||0)*100)} % (einmalig)`)});
-    if(meta===m)showMetaInfo('KI analysiert …');
+    const j=await aiAnalyze(text,folderList());
     if(meta!==m||view!=='vMeta')return; // inzwischen gespeichert oder verlassen
     const set=(id,v)=>{if(v&&!m.touched[id]){$('#'+id).value=v;return true}return false};
     const s=String(j.absender||'').trim().replace(/\s+(GmbH|AG|SE|KG|e\.\s?V\.|mbH|UG)(\s.*)?$/i,'');
@@ -715,8 +712,6 @@ async function aiRefine(m,text){
   }catch(e){
     const msg=errMsg(e);log('KI-Fehler Details: '+msg+(e&&e.stack?' | '+String(e.stack).split('\n').slice(0,3).join(' / '):''));
     let note='KI nicht verfügbar – Regeln verwendet';
-    if(e&&e.notCached){if(meta===m)showMetaInfo('KI-Modell noch nicht heruntergeladen (Einstellungen → KI-Analyse)');return}
-    if(aiCrash(msg))note=aiNextVariant();
     if(meta===m)showMetaInfo(note);toast(note+' ('+msg.slice(0,90)+')','err');
   }
 }
@@ -738,64 +733,51 @@ function pageMM(p){
   const land=p.out.width>p.out.height;return land?[f.h,f.w]:[f.w,f.h];
 }
 
-/* ---------- KI-Analyse auf dem Gerät (WebLLM, WebGPU) ---------- */
-const WEBLLM_URL='https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm@0.2.87/+esm';
-const AI_MODELS={small:'Qwen2.5-0.5B-Instruct',std:'Qwen2.5-1.5B-Instruct',big:'Qwen2.5-3B-Instruct'};
-let aiEngine=null,aiLoading=null,aiModelId='';
+/* ---------- KI-Analyse über GitHub Models (Weiterleitung über deine Azure-Funktion) ---------- */
+const AI_MODELS={'openai/gpt-4o-mini':'GPT-4o mini (empfohlen)','openai/gpt-4.1-mini':'GPT-4.1 mini (genauer)','openai/gpt-4.1-nano':'GPT-4.1 nano (am schnellsten)'};
 function folderList(){const set=new Set(parseCats(cfg.cats).map(c=>c.name));Object.values(learn).forEach(f=>set.add(f));(cfg.extraFolders||[]).forEach(f=>set.add(f));set.add('Sonstiges');return[...set]}
-async function gpuInfo(){
-  if(!navigator.gpu)return{ok:false,why:'Dieser Browser bietet kein WebGPU – KI auf dem Gerät ist hier nicht möglich.'};
-  const ad=await navigator.gpu.requestAdapter().catch(()=>null);
-  if(!ad)return{ok:false,why:'Keine geeignete Grafikeinheit gefunden – KI auf dem Gerät ist hier nicht möglich.'};
-  const i=ad.info||{};return{ok:true,f16:ad.features.has('shader-f16'),name:[i.vendor,i.architecture,i.device].filter(Boolean).join(' '),maxBuf:ad.limits.maxBufferSize};
+// Vor dem Senden schwärzen: Empfängerblock, Namen, IBAN/BIC, Kontakt- und lange Nummern, Geburtsdaten
+function redact(text){
+  if(!cfg.redact)return text;
+  let t=String(text);const last=recipient(t),full=(/(?:^|\n)\s*(?:Herrn?|Frau)\s*\n?\s*([A-ZÄÖÜ][a-zäöüß]+)\s+[A-ZÄÖÜ][a-zäöüß\-]+/.exec(t)||[])[1];
+  t=t.replace(/(^|\n)\s*(Herrn?|Frau|An)\s*\n?((?:[^\n]*\n){0,3})/,(m,a,b)=>`${a}${b} [Empfänger]\n`);
+  [last,full].filter(n=>n&&n.length>2).forEach(n=>{t=t.replace(new RegExp(`(?<![A-Za-zÄÖÜäöüß])${reEsc(n)}(?![a-zäöüß])`,'g'),'[Name]')});
+  (cfg.redactNames||'').split(/[,;\n]+/).map(s=>s.trim()).filter(s=>s.length>2).forEach(n=>{t=t.replace(new RegExp(reEsc(n),'gi'),'[Name]')});
+  t=t.replace(/\b[A-Z]{2}\d{2}(?:\s?[A-Z0-9]{4}){2,7}(?:\s?[A-Z0-9]{1,4})?\b/g,'[IBAN]')
+     .replace(/\b(BIC|SWIFT)\W{0,3}[A-Z0-9]{8,11}\b/gi,'$1 [BIC]')
+     .replace(/[\w.+-]+@[\w-]+\.[\w.-]+/g,'[E-Mail]')
+     .replace(/(?<![\d.,])(?:\+\d{1,3}[\s/-]?)?(?:\(?0\d{2,5}\)?[\s/-]?)\d{3,}(?:[\s/-]?\d{2,})*(?![\d.,])/g,'[Telefon]')
+     .replace(/(geb(?:oren|\.)?(?:\s*am)?\s*)\d{1,2}\.\s?\d{1,2}\.\s?\d{2,4}/gi,'$1[Datum]')
+     .replace(/(?<![\d.,])\d{6,}(?![\d.,])/g,'[Nr]')
+     .replace(/\b(Kunden|Vertrags|Versicherungs|Steuer|Personal|Mitglieds|Akten|Rechnungs)[-\s]?(nummer|nr\.?|zeichen|id)\W{0,3}[\w/.-]{3,}/gi,'$1$2 [Nr]');
+  return t;
 }
-// Varianten gegen GPU-Abstürze auf Android: 1) Worker+16 Bit  2) Hauptthread+16 Bit  3) Hauptthread+32 Bit
-const AI_VARIANTS=[{worker:true,f16:true},{worker:false,f16:true},{worker:false,f16:false}];
-const aiVariant=()=>AI_VARIANTS[Math.min(cfg.aiVariant||0,AI_VARIANTS.length-1)];
-const aiCrash=msg=>/mapAsync|Instance reference|device (was )?lost|DeviceLost|out of memory|OOM/i.test(msg);
-// nach einem GPU-Absturz nächste Variante vormerken; gibt Hinweistext zurück
-function aiNextVariant(){aiEngine=null;aiModelId='';const v=(cfg.aiVariant||0)+1;
-  if(v<AI_VARIANTS.length){cfg.aiVariant=v;save('cfg',cfg);log('KI: nächste Variante '+(v+1));return `Grafik-Absturz. Beim nächsten Versuch nutze ich eine andere Einstellung (Variante ${v+1} von ${AI_VARIANTS.length}). Bitte vorher App und Chrome komplett schließen (aus den zuletzt genutzten Apps wegwischen).`}
-  cfg.ai=false;save('cfg',cfg);log('KI: alle Varianten abgestürzt – KI deaktiviert');return 'Die KI läuft auf diesem Handy im Browser leider nicht stabil (alle drei Varianten abgestürzt). Ich habe sie ausgeschaltet – die Regeln arbeiten weiter.'}
-const aiSubs=new Set();let aiLast=null,aiLoggedPct=-1,aiWorker=null,aiAbort=null;
-// laufendes Laden abbrechen (z. B. bei Modellwechsel)
-function aiCancel(){if(!aiLoading)return;log('KI-Laden abgebrochen');try{aiWorker&&aiWorker.terminate()}catch{}aiWorker=null;if(aiAbort)aiAbort(new Error('abgebrochen'));aiLoading=null;aiLast=null;aiLoggedPct=-1}
-async function getAI(onProgress,allowDownload){
-  if(onProgress){aiSubs.add(onProgress);if(aiLast)onProgress(aiLast)} // jeder Wartende bekommt den Fortschritt
-  try{
-    const g=await gpuInfo();if(!g.ok)throw new Error(g.why);
-    const V=aiVariant(),id=`${AI_MODELS[cfg.aiModel]||AI_MODELS.std}-${g.f16&&V.f16?'q4f16_1':'q4f32_1'}-MLC`;
-    if(aiEngine&&aiModelId===id)return aiEngine;
-    if(!aiLoading){
-      const webllm=await import(WEBLLM_URL);
-      const appConfig={...webllm.prebuiltAppConfig,useIndexedDBCache:true}; // IndexedDB statt Cache API – Cache.add hängt auf Android bei Hugging-Face-Dateien
-      if(!allowDownload&&!(await webllm.hasModelInCache(id,appConfig).catch(()=>false))){const e=new Error('NOT_CACHED');e.notCached=true;throw e}
-      aiLoading=(async()=>{
-        if(aiEngine){try{await aiEngine.unload()}catch{}aiEngine=null}
-        log(`KI-Modell ${id} wird geladen (GPU: ${g.name||'?'}, Variante ${(cfg.aiVariant||0)+1}: ${V.worker?'Worker':'Hauptthread'})`);const t0=performance.now();
-        let eng=null;
-        // Download bricht auf dem Handy gelegentlich ab – bereits geladene Teile bleiben im Speicher, also einfach erneut versuchen
-        for(let attempt=1;!eng;attempt++){
-          const w=V.worker?new Worker('llm-worker.js?v='+VERSION,{type:'module'}):null;aiWorker=w;
-          const cancelled=new Promise((_,rej)=>{aiAbort=rej});
-          let lastTick=Date.now(),lastP=-1;const wd=setInterval(()=>{const p=aiLast?aiLast.progress:0;if(p!==lastP){lastP=p;lastTick=Date.now()}
-            else if(Date.now()-lastTick>90000&&aiAbort){aiAbort(new Error('Download hängt – keine Daten seit 90 s'))}},5000);
-          const opts={appConfig,initProgressCallback:r=>{
-            aiLast=r;const pct=Math.floor((r.progress||0)*10)*10;if(pct!==aiLoggedPct){aiLoggedPct=pct;log(`KI lädt ${pct} %: ${String(r.text||'').slice(0,80)}`)}
-            aiSubs.forEach(f=>{try{f(r)}catch{}})}};
-          try{eng=await Promise.race([cancelled,w?webllm.CreateWebWorkerMLCEngine(w,id,opts):webllm.CreateMLCEngine(id,opts)]);clearInterval(wd)}
-          catch(e){clearInterval(wd);try{w&&w.terminate()}catch{}const msg=errMsg(e);log(`KI-Laden Versuch ${attempt}: ${msg}`);
-            if(msg==='abgebrochen'||attempt>=4||!/network|fetch|Cache|Failed to fetch|aborted|hängt/i.test(msg))throw e;
-            aiSubs.forEach(f=>{try{f({progress:aiLast?aiLast.progress:0,text:`Verbindung unterbrochen – neuer Versuch ${attempt+1} …`})}catch{}});
-            await sleep(3000)}
-        }
-        log(`KI-Modell bereit nach ${Math.round((performance.now()-t0)/1000)} s`);
-        aiEngine=eng;aiModelId=id;return eng;
-      })();
-      const mine=aiLoading;mine.finally(()=>{if(aiLoading===mine){aiLoading=null;aiLast=null;aiLoggedPct=-1}setTimeout(applyUpdate,500)}).catch(()=>{});
-    }
-    return await aiLoading;
-  }finally{if(onProgress)aiSubs.delete(onProgress)}
+async function aiAnalyze(text,folders){
+  if(!cfg.aiUrl)throw new Error('Adresse der Azure-Funktion fehlt (Einstellungen → KI-Analyse)');
+  const token=await getToken(); // OneDrive-Anmeldung dient als Ausweis gegenüber der Azure-Funktion
+  const t0=performance.now(),t=redact(compactText(text));
+  const prompt=`Ordner zur Auswahl: ${folders.join(' | ')}
+
+Dokumenttext (per Texterkennung, kann Fehler enthalten; persönliche Angaben sind geschwärzt):
+"""
+${t}
+"""
+
+Gib ein JSON-Objekt mit genau diesen Feldern zurück:
+"absender": wer das Dokument ausgestellt hat (steht meist im Briefkopf oder in der Fußzeile) – Firma, Behörde, Schule, Praxis oder Person, kurz, ohne Rechtsform und ohne Adresse. NICHT der Empfänger und NICHT nur erwähnte Dritte.
+"typ": Art des Dokuments in einem Wort, z. B. Rechnung, Mahnung, Vertrag, Bescheid, Bescheinigung, Kontoauszug, Gehaltsabrechnung, Arztbrief, Rezept, Zeugnis, Elternbrief, Angebot, Quittung, Brief
+"datum": Ausstellungsdatum des Dokuments (meist oben rechts im Briefkopf) als JJJJ-MM-TT – nicht Behandlungs-, Liefer- oder Fälligkeitsdaten. Sonst ""
+"betreff": worum es inhaltlich geht, 1 bis 3 Wörter, z. B. „Osteopathie“, „Mobilfunk November“, „Kfz-Haftpflicht“ – keine Nummern, nicht den Absender wiederholen
+"ordner": genau ein Eintrag aus der Ordnerliste oben`;
+  const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),25000);
+  let r;try{r=await fetch(cfg.aiUrl,{method:'POST',signal:ctl.signal,headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({model:cfg.aiModel,messages:[{role:'system',content:AI_SYS},{role:'user',content:prompt}]})})}
+  catch(e){throw new Error(/abort/i.test(errMsg(e))?'Keine Antwort nach 25 s':'Azure-Funktion nicht erreichbar')}
+  finally{clearTimeout(to)}
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok)throw new Error(data.error||('HTTP '+r.status));
+  const raw=String(data.content||'').trim();log(`KI (${Math.round(performance.now()-t0)} ms, ${data.model||''}): ${raw.slice(0,200)}`);
+  const i=raw.indexOf('{'),j=raw.lastIndexOf('}');if(i<0||j<i)throw new Error('unverständliche Antwort');
+  return JSON.parse(raw.slice(i,j+1));
 }
 // Nur das Aussagekräftige an die KI: Briefkopf (Anfang) + Zeilen mit Schlüsselwörtern – kürzer = deutlich schneller
 function compactText(text){
@@ -807,32 +789,6 @@ function compactText(text){
 }
 const AI_SYS='Du ordnest eingescannte deutsche Briefe und Belege für ein privates Archiv ein. Antworte ausschließlich mit einem JSON-Objekt, ohne weiteren Text.';
 const errMsg=e=>e==null?'unbekannter Fehler':typeof e==='string'?e:(e.message||e.reason||(e.toString&&e.toString()!=='[object Object]'?e.toString():'')||(()=>{try{return JSON.stringify(e)}catch{return 'unbekannter Fehler'}})());
-async function aiAnalyze(text,folders,onProgress,allowDownload){
-  const eng=await getAI(r=>onProgress&&onProgress(r.progress,r.text),allowDownload);
-  const t0=performance.now();
-  const t=compactText(text);
-  const prompt=`Ordner zur Auswahl: ${folders.join(' | ')}
-
-Dokumenttext (per Texterkennung, kann Fehler enthalten):
-"""
-${t}
-"""
-
-Gib ein JSON-Objekt mit genau diesen Feldern zurück:
-"absender": wer das Dokument ausgestellt hat (steht meist im Briefkopf oder in der Fußzeile) – Firma, Behörde, Schule, Praxis oder Person, kurz, ohne Rechtsform und ohne Adresse. NICHT der Empfänger (Zeile nach „Herrn“/„Frau“) und NICHT nur erwähnte Dritte.
-"typ": Art des Dokuments in einem Wort, z. B. Rechnung, Mahnung, Vertrag, Bescheid, Bescheinigung, Kontoauszug, Gehaltsabrechnung, Arztbrief, Rezept, Zeugnis, Elternbrief, Angebot, Quittung, Brief
-"datum": Ausstellungsdatum des Dokuments (meist oben rechts im Briefkopf) als JJJJ-MM-TT – nicht Behandlungs-, Liefer- oder Fälligkeitsdaten. Sonst ""
-"betreff": worum es inhaltlich geht, 1 bis 3 Wörter, z. B. „Osteopathie“, „Mobilfunk November“, „Kfz-Haftpflicht“ – keine Nummern, nicht den Absender wiederholen
-"ordner": genau ein Eintrag aus der Ordnerliste oben
-
-Beispiel: {"absender":"Stadtwerke Rosenheim","typ":"Rechnung","datum":"2026-03-14","betreff":"Strom Jahresabrechnung","ordner":"Wohnen"}`;
-  const msgs=[{role:'system',content:AI_SYS},{role:'user',content:prompt}];
-  // Kein JSON-Modus: der ist in WebLLM 0.2.87 defekt und macht danach die Engine unbrauchbar – Antwort wird selbst ausgelesen
-  const res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:110});
-  const raw=(res.choices[0].message.content||'').trim();log(`KI (${Math.round(performance.now()-t0)} ms): ${raw.slice(0,240)}`);
-  const i=raw.indexOf('{'),j=raw.lastIndexOf('}');if(i<0||j<i)throw new Error('unverständliche Antwort');
-  return JSON.parse(raw.slice(i,j+1));
-}
 function curFolder(){const v=$('#mtFolder').value;return v==='__new'?cleanFolder($('#mtNewFolder').value)||'Sonstiges':v}
 function refreshName(){if(!meta)return;if(!meta.nameEdited)$('#mtName').value=buildName(cfg.pattern,{date:$('#mtDate').value,type:$('#mtType').value,sender:$('#mtSender').value,subject:$('#mtSubject').value,folder:curFolder()});
   $('#mtPath').textContent=['OneDrive',cfg.base,curFolder()].filter(Boolean).join(' › ')}
@@ -988,38 +944,16 @@ function openSettings(){
   $('#sClient').value=cfg.clientId;$('#sTenant').value=cfg.tenant;$('#sRedirect').textContent=redirectUri();$('#sBase').value=cfg.base;
   $('#sAuto').checked=cfg.autoUpload;$('#sDrop').checked=cfg.dropLocal;$('#sFormat').value=cfg.format;$('#sReview').checked=cfg.review;
   $('#sQual').value=cfg.quality;$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';$('#sPattern').value=cfg.pattern;$('#sDateSrc').value=cfg.dateSrc;$('#sCats').value=cfg.cats;
-  $('#sAi').checked=cfg.ai;$('#sAiModel').value=cfg.aiModel;aiStatus();showAiDiag();$('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
+  $('#sAi').checked=cfg.ai;$('#sAiModel').innerHTML=Object.entries(AI_MODELS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('');$('#sAiModel').value=cfg.aiModel;$('#sAiUrl').value=cfg.aiUrl||'';$('#sRedact').checked=cfg.redact;$('#sRedactNames').value=cfg.redactNames||'';aiStatus();$('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
   (async()=>{try{const e=await navigator.storage.estimate();const n=(await allDocs()).length;$('#sStore').textContent=`${n} Scans, ca. ${(e.usage/1048576).toFixed(1)} MB belegt (inkl. Texterkennungs- und Bildverarbeitungsdaten).`}catch{$('#sStore').textContent=''}})();
   nav('vSet');
 }
 function readSettings(){
   cfg.clientId=$('#sClient').value.trim();cfg.tenant=$('#sTenant').value;cfg.base=cleanFolder($('#sBase').value);cfg.autoUpload=$('#sAuto').checked;cfg.dropLocal=$('#sDrop').checked;
-  cfg.format=$('#sFormat').value;cfg.review=$('#sReview').checked;cfg.quality=+$('#sQual').value;cfg.pattern=$('#sPattern').value.trim()||DEF.pattern;cfg.dateSrc=$('#sDateSrc').value;cfg.cats=$('#sCats').value;cfg.ai=$('#sAi').checked;cfg.aiModel=$('#sAiModel').value;
+  cfg.format=$('#sFormat').value;cfg.review=$('#sReview').checked;cfg.quality=+$('#sQual').value;cfg.pattern=$('#sPattern').value.trim()||DEF.pattern;cfg.dateSrc=$('#sDateSrc').value;cfg.cats=$('#sCats').value;cfg.ai=$('#sAi').checked;cfg.aiModel=$('#sAiModel').value||cfg.aiModel;cfg.aiUrl=$('#sAiUrl').value.trim();cfg.redact=$('#sRedact').checked;cfg.redactNames=$('#sRedactNames').value;
   save('cfg',cfg);$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';
 }
-async function aiStatus(){const el=$('#sAiInfo');const g=await gpuInfo();
-  el.textContent=g.ok?`Grafik: ${g.name||'WebGPU verfügbar'} · Variante ${(cfg.aiVariant||0)+1} von ${AI_VARIANTS.length}${aiModelId?` · geladen: ${aiModelId}`:''}`:g.why}
-// WebLLM meldet z. B. „Fetching param cache[12/38]: 310MB fetched. 23% completed, 41 secs elapsed.“
-function aiProgressText(t){t=String(t||'');const mb=/(\d+)MB fetched/.exec(t),sec=/(\d+) secs? elapsed/.exec(t),part=/\[(\d+)\/(\d+)\]/.exec(t);
-  if(/Loading model from cache/i.test(t))return 'Modell wird aus dem Handy-Speicher gestartet …';
-  if(mb)return `${mb[1]} MB geladen${part?`, Teil ${part[1]} von ${part[2]}`:''}${sec?`, seit ${sec[1]} s`:''}`;
-  return t.slice(0,90)||'Modell wird vorbereitet …'}
-const fmtGB=b=>(b/1073741824).toFixed(b>1e9?1:2).replace('.',',')+' GB';
-async function aiStorage(){try{const e=await navigator.storage.estimate();let ai=0;
-  for(const k of await caches.keys())if(/^webllm/.test(k)){const c=await caches.open(k);for(const r of await c.keys()){const m=await c.match(r);const l=+(m&&m.headers.get('content-length')||0);ai+=l}}
-  return{used:e.usage||0,quota:e.quota||0,ai}}catch{return null}}
-async function showAiDiag(){const st=await aiStorage();if(st)$('#sAiDiag').textContent=`Speicher der App: ${fmtGB(st.used)} belegt (davon KI-Modelle ca. ${fmtGB(st.ai)}), frei für die App: ${fmtGB(Math.max(0,st.quota-st.used))}`}
-// Vor dem Download prüfen: genug Speicher? Hugging Face erreichbar?
-async function aiPreflight(el){
-  const need={small:0.45,std:1.2,big:2.2}[cfg.aiModel]*1073741824,st=await aiStorage();
-  if(st&&st.quota&&st.quota-st.used<need){el.textContent=`Zu wenig Speicher für die App: frei ${fmtGB(st.quota-st.used)}, nötig ca. ${fmtGB(need)}. Bitte „KI-Modelle vom Handy löschen“ tippen oder Platz auf dem Handy schaffen.`;log('KI: zu wenig Speicher');return false}
-  el.textContent='Verbindung zu Hugging Face wird geprüft …';const id=`${AI_MODELS[cfg.aiModel]}-q4f16_1-MLC`,t0=performance.now();
-  try{const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),15000);
-    const r=await fetch(`https://huggingface.co/mlc-ai/${id}/resolve/main/ndarray-cache.json`,{signal:ctl.signal,cache:'no-store'});clearTimeout(to);
-    if(!r.ok)throw new Error('HTTP '+r.status);await r.json();log(`Hugging Face erreichbar (${Math.round(performance.now()-t0)} ms)`);return true}
-  catch(e){const msg=errMsg(e);log('Hugging Face nicht erreichbar: '+msg);
-    el.textContent=`Hugging Face ist von diesem Handy aus nicht erreichbar (${/abort/i.test(msg)?'keine Antwort nach 15 s':msg}). Häufige Ursachen: Werbeblocker, „Privates DNS“ in den Android-Einstellungen oder ein gefiltertes WLAN.`;return false}
-}
+async function aiStatus(){$('#sAiInfo').textContent=cfg.aiUrl?'':'Noch nicht eingerichtet: Adresse der Azure-Funktion fehlt.'}
 function openOneDriveApp(url){
   // Microsoft bietet keinen Link direkt zu einer Datei in der App – wir starten die App (Dateien-Ansicht); ohne App: Web
   if(/Android/i.test(navigator.userAgent))location.href=`intent://files#Intent;scheme=ms-onedrive;package=com.microsoft.skydrive;S.browser_fallback_url=${encodeURIComponent(url)};end`;
@@ -1035,13 +969,13 @@ $('#camGal').onclick=()=>{camBack();$('#fGal').click()};
 $('#camTorch').onclick=async()=>{if(!track)return;torchOn=!torchOn;try{await track.applyConstraints({advanced:[{torch:torchOn}]})}catch(e){torchOn=false;log('Licht: '+e.message)}$('#camTorch').setAttribute('aria-pressed',String(torchOn))};
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&view==='vCam')camBack()});
 $('#sLogCopy').onclick=async()=>{try{await navigator.clipboard.writeText(`Scan ${VERSION}\n${navigator.userAgent}\n`+LOG.join('\n'));toast('Protokoll kopiert','ok')}catch{toast('Kopieren nicht möglich')}};
-$('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');let wl=null;try{wl=await navigator.wakeLock.request('screen')}catch{}
-  try{if(!(await aiPreflight(el)))return;const sample='Telekom Deutschland GmbH\nIhre Rechnung für November 2026\nRechnungsdatum 03.11.2026\nKundennummer 123456\nMobilfunk-Vertrag MagentaMobil M\nGesamtbetrag 39,95 € inkl. MwSt.';
-    el.textContent='Modell wird geladen …';const t0=performance.now();const j=await aiAnalyze(sample,folderList(),(p,t)=>{el.textContent=/neuer Versuch/.test(t||'')?t:`${Math.round((p||0)*100)} % – ${aiProgressText(t)}`},true);
-    el.textContent=`Funktioniert (${((performance.now()-t0)/1000).toFixed(1)} s inkl. Laden): ${[j.datum,j.typ,j.absender,j.betreff,'→ '+j.ordner].filter(Boolean).join(' · ')}`;
+$('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');el.textContent='Wird getestet …';
+  try{const sample='Telekom Deutschland GmbH\nHerrn\nMax Mustermann\nMusterweg 5, 12345 Musterstadt\nIhre Rechnung für November 2026\nRechnungsdatum 03.11.2026\nKundennummer 12345678\nMobilfunk-Vertrag MagentaMobil M\nGesamtbetrag 39,95 € inkl. MwSt.\nIBAN DE12 3456 7890 1234 5678 90';
+    const t0=performance.now();const j=await aiAnalyze(sample,folderList());
+    el.textContent=`Funktioniert (${((performance.now()-t0)/1000).toFixed(1)} s): ${[j.datum,j.typ,j.absender,j.betreff,'→ '+j.ordner].filter(Boolean).join(' · ')}`;
     if(!cfg.ai){$('#sAi').checked=true;readSettings()}}
-  catch(e){const msg=errMsg(e);log('KI-Test: '+msg);el.textContent=aiCrash(msg)?aiNextVariant():'Nicht möglich: '+msg+(/network|Cache|fetch/i.test(msg)?' – Verbindung prüfen und erneut tippen; bereits geladene Teile bleiben erhalten.':'');$('#sAi').checked=cfg.ai}
-  finally{try{wl&&wl.release()}catch{}}};
+  catch(e){const msg=errMsg(e);log('KI-Test: '+msg);el.textContent='Nicht möglich: '+msg}};
+$('#sAiPreview').onclick=()=>{const t=pages.length?pages.map(p=>p.text||'').join('\n'):'Praxis für Osteopathie\nJonas Vogt\nHerrn\nJan Muster\nHauptstr. 1\n12345 Ort\nRechnung Nr. R26-453\nIBAN DE47 7115 0000 0020 1040 63\nTel. 08051 967 9339\nkontakt@praxis.de';$('#sAiInfo').textContent='So sieht die KI den Text:\n'+redact(compactText(t));$('#sAiInfo').style.whiteSpace='pre-wrap'};
 $('#sLogClear').onclick=()=>{LOG.length=0;save('log',LOG);$('#sLog').textContent=''};
 $('#btnGallery').onclick=()=>{$('#fGal').click()};
 $('#btnSync').onclick=()=>syncAll(true);
@@ -1072,11 +1006,6 @@ $('#mtName').oninput=()=>{meta.nameEdited=true};
 $('#mtSave').onclick=saveDoc;
 $('#setBack').onclick=closeSettings;
 document.querySelectorAll('#vSet input,#vSet select,#vSet textarea').forEach(el=>el.addEventListener('change',readSettings));
-$('#sAiClear').onclick=async()=>{if(!confirm('Alle heruntergeladenen KI-Modelle vom Handy löschen? (Sie können jederzeit neu geladen werden.)'))return;aiCancel();try{if(aiEngine){await aiEngine.unload().catch(()=>{})}}catch{}aiEngine=null;aiModelId='';
-  for(const k of await caches.keys())if(/^webllm/.test(k))await caches.delete(k);
-  try{for(const d of (await indexedDB.databases?.())||[])if(/^webllm/.test(d.name||''))indexedDB.deleteDatabase(d.name)}catch{}
-  log('KI-Modelle gelöscht');$('#sAiInfo').textContent='KI-Modelle gelöscht.';showAiDiag()};
-$('#sAiModel').addEventListener('change',()=>{if(aiLoading){aiCancel();$('#sAiInfo').textContent='Vorheriger Download abgebrochen – jetzt „Modell herunterladen und testen“ tippen.'}});
 $('#sQual').oninput=()=>{$('#sQualV').textContent=Math.round($('#sQual').value*100)+' %'};
 $('#sLogin').onclick=()=>{readSettings();login()};
 $('#sLogout').onclick=logout;
@@ -1105,7 +1034,7 @@ async function checkUpdate(force){
   catch(e){log('Update-Prüfung: '+e.message)}
 }
 function applyUpdate(){ // nur neu laden, wenn gerade nichts in Arbeit ist (Startseite, kein Upload, kein Dialog)
-  if(!updatePending||view!=='vHome'||!$('#busy').hidden||$('#docDlg').open||syncing||aiLoading)return;
+  if(!updatePending||view!=='vHome'||!$('#busy').hidden||$('#docDlg').open||syncing)return;
   updatePending=false;toast('Neue Version wird geladen …');setTimeout(()=>location.reload(),700);
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkUpdate()});
