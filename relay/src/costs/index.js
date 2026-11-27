@@ -31,7 +31,9 @@ module.exports = async function (context, req) {
         dataset: { granularity: 'Daily', aggregation: { totalCost: { name: 'Cost', function: 'Sum' } } } })
     });
     const cj = await cr.json().catch(() => ({}));
-    if (!cr.ok) return send(502, { error: 'Kostenabfrage: ' + ((cj.error && cj.error.message) || ('HTTP ' + cr.status)) });
+    // Neues Abo: Die Kostenverwaltung kennt es in den ersten 1–2 Tagen noch nicht (404) – dann nur die Anfragen zählen
+    const costPending = cr.status === 404 || /GetAzureSubscriptionsById/i.test(JSON.stringify(cj));
+    if (!cr.ok && !costPending) return send(502, { error: 'Kostenabfrage: ' + ((cj.error && cj.error.message) || ('HTTP ' + cr.status)) });
     const cols = (cj.properties && cj.properties.columns || []).map(c => c.name);
     const iC = cols.indexOf('Cost'), iD = cols.indexOf('UsageDate'), iCur = cols.indexOf('Currency');
     const days = (cj.properties && cj.properties.rows || []).map(r => ({ d: String(r[iD]).replace(/^(\d{4})(\d{2})(\d{2}).*/, '$1-$2-$3'), c: Number(r[iC]) || 0 }));
@@ -51,11 +53,11 @@ module.exports = async function (context, req) {
     const sum = (arr, key, f) => arr.filter(f).reduce((a, x) => a + x[key], 0);
     const upTo = d => !lastCostDay || d <= lastCostDay; // Anfragen nur bis zum letzten abgerechneten Tag zählen, damit der Schnitt stimmt
     const body = {
-      currency, lastCostDay, since: ymd(from),
+      currency, lastCostDay, costPending, since: ymd(from),
       month: { cost: sum(days, 'c', x => x.d.startsWith(month)), requests: sum(req_, 'n', x => x.d.startsWith(month)), billedRequests: sum(req_, 'n', x => x.d.startsWith(month) && upTo(x.d)) },
       total: { cost: sum(days, 'c', () => true), requests: sum(req_, 'n', () => true), billedRequests: sum(req_, 'n', x => upTo(x.d)) }
     };
-    cache = { at: Date.now(), body };
+    if (!costPending) cache = { at: Date.now(), body };
     return send(200, body);
   } catch (e) {
     return send(500, { error: String(e && e.message || e) });

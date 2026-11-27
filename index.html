@@ -348,7 +348,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27u';
+const VERSION='2026-11-27v';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -989,8 +989,8 @@ async function loadCosts(){const el=$('#sCost');if(!cfg.aiUrl){el.textContent=''
     const de=d=>d?d.split('-').reverse().join('.'):'';
     const line=(lbl,x)=>{const avg=x.billedRequests?x.cost/x.billedRequests:0;
       return `${lbl}: ${money(x.cost)} · ${x.requests} KI-Analyse${x.requests===1?'':'n'}`+(x.billedRequests&&x.cost>0?` · Ø ${(avg*100).toLocaleString('de-DE',{maximumFractionDigits:3})} ct pro Scan`:'')};
-    const out=[line('Diesen Monat',j.month),line('Seit '+de(j.since),j.total)];
-    out.push(j.lastCostDay?`Abgerechnet bis ${de(j.lastCostDay)}`+(j.total.requests>j.total.billedRequests?` – Kosten für ${j.total.requests-j.total.billedRequests} neuere Analysen folgen.`:'.'):'Noch keine Abrechnungsdaten – Azure liefert sie mit 8–24 Stunden Verzögerung.');
+    const out=j.costPending?[`KI-Analysen diesen Monat: ${j.month.requests} · seit ${de(j.since)}: ${j.total.requests}`]:[line('Diesen Monat',j.month),line('Seit '+de(j.since),j.total)];
+    out.push(j.costPending?'Azure stellt für dein neues Abo noch keine Abrechnung bereit (dauert bis zu 2 Tage). Die Kosten erscheinen dann automatisch.':j.lastCostDay?`Abgerechnet bis ${de(j.lastCostDay)}`+(j.total.requests>j.total.billedRequests?` – Kosten für ${j.total.requests-j.total.billedRequests} neuere Analysen folgen.`:'.'):'Noch keine Abrechnungsdaten – Azure liefert sie mit 8–24 Stunden Verzögerung.');
     el.textContent=out.join('\n')}
   catch(e){const m=errMsg(e);log('Kosten: '+m);el.textContent='Kosten nicht abrufbar: '+m}}
 $('#sCostBtn').onclick=loadCosts;
