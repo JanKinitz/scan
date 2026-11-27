@@ -342,7 +342,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27i';
+const VERSION='2026-11-27j';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -496,6 +496,7 @@ function findDate(text){
     if(/(geb|geboren|geburt|gültig bis|fällig|zahlbar bis|bis zum|leistungszeitraum|zeitraum|verordnung|behandlung|termin|lieferdatum)/.test(before))s-=4;
     if(/;\s*$/.test(before)||/^\s*;/.test(L.slice(idx+8,idx+12)))s-=2; // Datumslisten (Termine)
     s+=Math.max(0,2-idx/1500);
+    if(dt<new Date(now.getFullYear()-3,now.getMonth(),now.getDate()))s-=3; // sehr alte Daten sind meist Geburts- oder Vertragsdaten
     cands.push({iso:`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`,s,idx})};
   let m;const r1=/(?<!\d)(\d{1,2})\.\s?(\d{1,2})\.\s?(\d{4}|\d{2})(?!\d)/g;while((m=r1.exec(text)))add(+m[3],+m[2],+m[1],m.index);
   const r2=/(?<!\d)(\d{1,2})\.?\s+(januar|jan|februar|feb|märz|mär|maerz|mrz|april|apr|mai|juni|jun|juli|jul|august|aug|september|sept|sep|oktober|okt|november|nov|dezember|dez)\.?\s+(\d{4})/gi;
@@ -694,7 +695,8 @@ function showMetaInfo(extra){if(meta)$('#mtInfo').textContent=[...(meta.info||[]
 // KI läuft im Hintergrund und ergänzt nur Felder, die du noch nicht selbst geändert hast
 async function aiRefine(m,text){
   try{
-    const j=await aiAnalyze(text,folderList(),p=>{if(meta===m)showMetaInfo(`KI-Modell lädt … ${Math.round((p||0)*100)} %`)});
+    const j=await aiAnalyze(text,folderList(),(p,t)=>{if(meta===m)showMetaInfo(/cache|Cache|Loading model from cache/.test(t||'')?`KI-Modell startet … ${Math.round((p||0)*100)} %`:`KI-Modell wird heruntergeladen … ${Math.round((p||0)*100)} % (einmalig)`)});
+    if(meta===m)showMetaInfo('KI analysiert …');
     if(meta!==m||view!=='vMeta')return; // inzwischen gespeichert oder verlassen
     const set=(id,v)=>{if(v&&!m.touched[id]){$('#'+id).value=v;return true}return false};
     const s=String(j.absender||'').trim().replace(/\s+(GmbH|AG|SE|KG|e\.\s?V\.|mbH|UG)(\s.*)?$/i,'');
@@ -746,19 +748,27 @@ async function gpuInfo(){
   if(!ad)return{ok:false,why:'Keine geeignete Grafikeinheit gefunden – KI auf dem Gerät ist hier nicht möglich.'};
   const i=ad.info||{};return{ok:true,f16:ad.features.has('shader-f16'),name:[i.vendor,i.architecture,i.device].filter(Boolean).join(' '),maxBuf:ad.limits.maxBufferSize};
 }
+const aiSubs=new Set();let aiLast=null,aiLoggedPct=-1;
 async function getAI(onProgress){
-  const g=await gpuInfo();if(!g.ok)throw new Error(g.why);
-  const id=`${AI_MODELS[cfg.aiModel]||AI_MODELS.std}-${g.f16?'q4f16_1':'q4f32_1'}-MLC`;
-  if(aiEngine&&aiModelId===id)return aiEngine;
-  if(aiLoading)return aiLoading;
-  aiLoading=(async()=>{
-    if(aiEngine){try{await aiEngine.unload()}catch{}aiEngine=null}
-    log(`KI-Modell ${id} (GPU: ${g.name||'?'})`);
-    const webllm=await import(WEBLLM_URL);
-    const eng=await webllm.CreateWebWorkerMLCEngine(new Worker('llm-worker.js?v='+VERSION,{type:'module'}),id,{initProgressCallback:r=>onProgress&&onProgress(r)});
-    aiEngine=eng;aiModelId=id;return eng;
-  })();
-  try{return await aiLoading}finally{aiLoading=null}
+  if(onProgress){aiSubs.add(onProgress);if(aiLast)onProgress(aiLast)} // jeder Wartende bekommt den Fortschritt
+  try{
+    const g=await gpuInfo();if(!g.ok)throw new Error(g.why);
+    const id=`${AI_MODELS[cfg.aiModel]||AI_MODELS.std}-${g.f16?'q4f16_1':'q4f32_1'}-MLC`;
+    if(aiEngine&&aiModelId===id)return aiEngine;
+    if(!aiLoading){
+      aiLoading=(async()=>{
+        if(aiEngine){try{await aiEngine.unload()}catch{}aiEngine=null}
+        log(`KI-Modell ${id} wird geladen (GPU: ${g.name||'?'})`);const t0=performance.now();
+        const webllm=await import(WEBLLM_URL);
+        const eng=await webllm.CreateWebWorkerMLCEngine(new Worker('llm-worker.js?v='+VERSION,{type:'module'}),id,{initProgressCallback:r=>{
+          aiLast=r;const pct=Math.floor((r.progress||0)*10)*10;if(pct!==aiLoggedPct){aiLoggedPct=pct;log(`KI lädt ${pct} %: ${String(r.text||'').slice(0,80)}`)}
+          aiSubs.forEach(f=>{try{f(r)}catch{}})}});
+        log(`KI-Modell bereit nach ${Math.round((performance.now()-t0)/1000)} s`);
+        aiEngine=eng;aiModelId=id;return eng;
+      })().finally(()=>{aiLoading=null;aiLast=null;aiLoggedPct=-1});
+    }
+    return await aiLoading;
+  }finally{if(onProgress)aiSubs.delete(onProgress)}
 }
 // Nur das Aussagekräftige an die KI: Briefkopf (Anfang) + Zeilen mit Schlüsselwörtern – kürzer = deutlich schneller
 function compactText(text){
@@ -771,7 +781,7 @@ function compactText(text){
 const AI_SYS='Du ordnest eingescannte deutsche Briefe und Belege für ein privates Archiv ein. Antworte ausschließlich mit einem JSON-Objekt, ohne weiteren Text.';
 const errMsg=e=>e==null?'unbekannter Fehler':typeof e==='string'?e:(e.message||e.reason||(e.toString&&e.toString()!=='[object Object]'?e.toString():'')||(()=>{try{return JSON.stringify(e)}catch{return 'unbekannter Fehler'}})());
 async function aiAnalyze(text,folders,onProgress){
-  const eng=await getAI(r=>onProgress&&onProgress(r.progress));
+  const eng=await getAI(r=>onProgress&&onProgress(r.progress,r.text));
   const t0=performance.now();
   const t=compactText(text);
   const prompt=`Ordner zur Auswahl: ${folders.join(' | ')}
