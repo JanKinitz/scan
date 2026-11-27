@@ -344,7 +344,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27n';
+const VERSION='2026-11-27o';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -819,10 +819,9 @@ Gib ein JSON-Objekt mit genau diesen Feldern zurück:
 "ordner": genau ein Eintrag aus der Ordnerliste oben
 
 Beispiel: {"absender":"Stadtwerke Rosenheim","typ":"Rechnung","datum":"2026-03-14","betreff":"Strom Jahresabrechnung","ordner":"Wohnen"}`;
-  const msgs=[{role:'system',content:AI_SYS},{role:'user',content:prompt}];let res;
-  try{res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:110,response_format:{type:'json_object'}})}
-  catch(e){log('KI (JSON-Modus) Fehler: '+errMsg(e)+' – zweiter Versuch ohne JSON-Modus');try{await eng.resetChat()}catch{}
-    res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:110})}
+  const msgs=[{role:'system',content:AI_SYS},{role:'user',content:prompt}];
+  // Kein JSON-Modus: der ist in WebLLM 0.2.87 defekt und macht danach die Engine unbrauchbar – Antwort wird selbst ausgelesen
+  const res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:110});
   const raw=(res.choices[0].message.content||'').trim();log(`KI (${Math.round(performance.now()-t0)} ms): ${raw.slice(0,240)}`);
   const i=raw.indexOf('{'),j=raw.lastIndexOf('}');if(i<0||j<i)throw new Error('unverständliche Antwort');
   return JSON.parse(raw.slice(i,j+1));
