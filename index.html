@@ -367,7 +367,7 @@ async function fileToCanvas(file){
 let cvW=null,cvReady=null,cvLoaded=false,cvSeq=0;const cvPend=new Map();
 function cvWorker(){
   if(cvW)return cvReady;
-  const w=new Worker('cv-worker.js');cvW=w;
+  const w=new Worker('cv-worker.js?v='+VERSION);cvW=w;
   cvReady=new Promise((res,rej)=>{
     w.onmessage=e=>{const d=e.data;
       if('ready' in d){if(d.ready){cvLoaded=true;log('Bildverarbeitung bereit');res()}else{rej(new Error('Bildverarbeitung: '+d.err))}return}
