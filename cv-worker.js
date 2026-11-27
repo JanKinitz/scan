@@ -6,7 +6,8 @@ const ready = (async () => {
   for (;;) {
     let c = self.cv;
     if (c instanceof Promise) { c = await c; self.cv = c; }
-    if (c && c.Mat) return c;
+    // Wichtig: nicht das Modul selbst zurückgeben – es ist „thenable“ und würde das Promise endlos auflösen
+    if (c && c.Mat) return true;
     if (Date.now() - t0 > 120000) throw new Error('OpenCV startet nicht');
     await new Promise(r => setTimeout(r, 50));
   }
