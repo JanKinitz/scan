@@ -3,6 +3,7 @@
   "short_name": "Scan",
   "description": "Dokumente fotografieren, gerade richten, benennen und als PDF in OneDrive ablegen.",
   "lang": "de",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

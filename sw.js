@@ -1,5 +1,5 @@
 // Service Worker: App offline verfügbar machen, große Bibliotheken dauerhaft cachen
-const SHELL_CACHE = 'scan-shell-v5';
+const SHELL_CACHE = 'scan-shell-v6';
 const LIB_CACHE = 'scan-libs-v1';
 const SHELL = ['./', './index.html', './cv-worker.js', './llm-worker.js', './manifest.webmanifest', './icon.svg', './icon-192.png', './icon-512.png'];
 const LIB_HOSTS = /^https:\/\/(docs\.opencv\.org|cdn\.jsdelivr\.net)\//;
@@ -36,7 +36,8 @@ self.addEventListener('fetch', e => {
   const url = new URL(req.url);
   if (url.origin === self.location.origin) {
     e.respondWith(
-      fetch(req).then(res => {
+      // no-cache: am Browser-Cache vorbei immer beim Server nachfragen, damit Updates sofort ankommen
+      fetch(req.url, { cache: 'no-cache' }).then(res => {
         if (res.ok) { const copy = res.clone(); caches.open(SHELL_CACHE).then(c => c.put(req, copy)); }
         return res;
       }).catch(() => caches.match(req, { ignoreSearch: true }).then(hit => hit || caches.match('./index.html')))

@@ -50,6 +50,7 @@ h2{font-size:18px;margin:30px 0 4px}
 [hidden]{display:none!important}
 .banner{display:flex;gap:10px;align-items:center;flex-wrap:wrap;padding:12px 14px;border-radius:14px;background:var(--card);border:1px solid var(--warn);margin:4px 0 12px}
 .banner p{margin:0;flex:1 1 200px}
+.banner.inst{border-color:var(--acc)}
 .search{margin-top:20px}
 .chips{display:flex;gap:8px;overflow-x:auto;padding:12px 0 4px;scrollbar-width:none}
 .chips button{flex:none;min-height:36px;border-radius:99px;padding:0 14px;font-size:14px}
@@ -131,6 +132,7 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     <button class="icon" id="btnSettings" aria-label="Einstellungen"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
   </header>
   <div class="wrap">
+    <div id="installBar" class="banner inst" hidden><p><b>Als App installieren</b><br><span class="mute" style="font-size:14px">Startet dann direkt vom Startbildschirm, ohne Browserleiste.</span></p><button class="pri" id="btnInstall">Installieren</button></div>
     <div id="reauth" class="banner" hidden><p>Die OneDrive-Anmeldung ist abgelaufen. <span id="reauthN"></span></p><button class="pri" id="btnReauth">Neu verbinden</button></div>
     <button id="btnScan" class="hero" aria-label="Dokument scannen">
       <svg viewBox="0 0 160 190" aria-hidden="true">
@@ -338,7 +340,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27e';
+const VERSION='2026-11-27f';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -353,6 +355,7 @@ function nav(v){
   if(v==='vHome'&&view!=='vHome'&&history.state&&history.state.s){skipPop=true;history.back()}
   document.querySelectorAll('.view').forEach(e=>e.classList.toggle('on',e.id===v));view=v;window.scrollTo(0,0);
   if(v==='vCrop')requestAnimationFrame(edLayout);
+  if(v==='vHome')setTimeout(applyUpdate,400);
 }
 const backOf={vCam:()=>camBack(),vCrop:()=>cropBack(),vPages:()=>pgBack(),vMeta:()=>nav('vPages'),vSet:()=>closeSettings()};
 addEventListener('popstate',()=>{if(skipPop){skipPop=false;return}if(view!=='vHome'){backOf[view]();if(view!=='vHome')history.pushState({s:1},'')}});
@@ -842,7 +845,7 @@ async function syncAll(manual){
       catch(e){d.status='error';d.err=e.message;await putDoc(d);if(e.auth){renderOd();break}continue}
       await putDoc(d)}
     if(okN)toast(okN===1?'Nach OneDrive hochgeladen':`${okN} Scans nach OneDrive hochgeladen`,'ok');
-  }catch(e){toast(e.message,'err')}finally{syncing=false;renderList();renderOd()}
+  }catch(e){toast(e.message,'err')}finally{syncing=false;renderList();renderOd();applyUpdate()}
 }
 
 /* ---------- Startseite ---------- */
@@ -960,12 +963,38 @@ $('#sLearnReset').onclick=()=>{learn={};save('learn',learn);$('#sLearnN').textCo
 $('#typeList').innerHTML=TYPES.map(t=>`<option value="${esc(t[0])}">`).join('');
 addEventListener('online',()=>cfg.autoUpload&&syncAll());
 
+/* ---------- Installieren-Button ---------- */
+let installEvt=null;
+const isStandalone=()=>matchMedia('(display-mode: standalone)').matches||matchMedia('(display-mode: minimal-ui)').matches||navigator.standalone===true;
+addEventListener('beforeinstallprompt',e=>{e.preventDefault();installEvt=e;$('#installBar').hidden=isStandalone();log('Installation angeboten')});
+addEventListener('appinstalled',()=>{installEvt=null;$('#installBar').hidden=true;log('App installiert');toast('App installiert – du findest „Scan“ jetzt auf dem Startbildschirm.','ok')});
+$('#btnInstall').onclick=async()=>{if(!installEvt)return;installEvt.prompt();try{const r=await installEvt.userChoice;log('Installation: '+r.outcome)}catch{}installEvt=null;$('#installBar').hidden=true};
+
+/* ---------- Automatische Updates ---------- */
+let updatePending=false,lastCheck=0;
+async function checkUpdate(force){
+  if(!navigator.onLine||(!force&&Date.now()-lastCheck<60000))return;lastCheck=Date.now();
+  try{const t=await fetch('index.html?u='+Date.now(),{cache:'no-store'}).then(r=>r.ok?r.text():'');
+    const m=/const VERSION='([^']+)'/.exec(t);
+    if(m&&m[1]!==VERSION){log(`Neue Version ${m[1]} gefunden`);updatePending=true;
+      try{const reg=navigator.serviceWorker&&await navigator.serviceWorker.getRegistration();if(reg)await reg.update()}catch{}
+      applyUpdate()}}
+  catch(e){log('Update-Prüfung: '+e.message)}
+}
+function applyUpdate(){ // nur neu laden, wenn gerade nichts in Arbeit ist (Startseite, kein Upload, kein Dialog)
+  if(!updatePending||view!=='vHome'||!$('#busy').hidden||$('#docDlg').open||syncing)return;
+  updatePending=false;toast('Neue Version wird geladen …');setTimeout(()=>location.reload(),700);
+}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkUpdate()});
+setInterval(()=>checkUpdate(true),10*60*1000);
+
 /* ---------- Start ---------- */
 (async()=>{
   if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
   await handleRedirect();renderOd();await renderList();
   if(cfg.autoUpload)syncAll();
-  log('App gestartet, Version '+VERSION);
+  log('App gestartet, Version '+VERSION+(isStandalone()?' (installiert)':' (Browser)'));
+  setTimeout(()=>checkUpdate(true),3000);
 })();
 }
 </script>
