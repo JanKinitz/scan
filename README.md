@@ -2,7 +2,7 @@
 
 Eine Web-App (PWA), die du auf Android wie eine normale App installierst:
 
-1. **Aufnehmen** – Kamera oder Galerie, mehrere Seiten pro Dokument
+1. **Aufnehmen** – eingebaute Kamera (bleibt in der App, mit Licht-Schalter) oder Galerie, mehrere Seiten pro Dokument
 2. **Ecken erkennen** – OpenCV findet das Blatt; mit der Lupe kannst du die Ecken nachziehen
 3. **Entzerren** – perspektivisch gerade gerichtet und auf A4 gebracht (einstellbar: immer A4 / automatisch / Originalproportion)
 4. **Auto-Filter** – erkennt Farbe; reine Textseiten → Schwarz-Weiß, farbige → Farbe. Der Hintergrund wird jeweils herausgerechnet, damit das Papier reinweiß ist und kein Grauschleier bleibt. Manuell: Farbe, Graustufen, S/W, Original
@@ -58,6 +58,10 @@ Beim ersten Scan lädt die App einmalig die Bildverarbeitung (ca. 10 MB) und die
 - Ohne Netz werden Scans gespeichert und hochgeladen, sobald du wieder online bist. Mit **Jetzt hochladen** geht es auch manuell.
 - Tippen auf einen Scan: Teilen, Herunterladen, in OneDrive öffnen, erneut hochladen, löschen.
 
+## Wenn etwas hakt
+
+Einstellungen → **Protokoll** zeigt, was die App zuletzt getan hat (inkl. Fehlermeldungen und Laufzeiten). „Protokoll kopieren“ und an Claude schicken.
+
 ## Grenzen, die du kennen solltest
 
 - **Anmeldung:** Microsoft lässt reine Web-Apps (SPA) nur 24 Stunden ohne erneute Anmeldung zu. Danach erscheint ein Hinweis *Neu verbinden*. Ein Tipp genügt; meist ist kein Passwort nötig, weil Chrome eingeloggt bleibt. Bis dahin werden Scans lokal gesammelt.
@@ -71,6 +75,7 @@ Beim ersten Scan lädt die App einmalig die Bildverarbeitung (ca. 10 MB) und die
 | Datei | Zweck |
 |---|---|
 | `index.html` | Die komplette App (Oberfläche, Bildverarbeitung, Analyse, PDF, OneDrive) |
+| `cv-worker.js` | Bildverarbeitung (OpenCV) im Hintergrund-Thread |
 | `sw.js` | Offline-Cache für App und Bibliotheken |
 | `manifest.webmanifest`, `icon*` | Installierbarkeit als Android-App |
 
