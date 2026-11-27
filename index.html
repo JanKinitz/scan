@@ -62,6 +62,9 @@ h2{font-size:18px;margin:30px 0 4px}
 .doc small{color:var(--mute);font-size:13px}
 .st{font-style:normal;font-size:12px;white-space:nowrap;padding:3px 8px;border-radius:99px;background:var(--bg)}
 .st.uploaded{color:var(--ok)}.st.error{color:var(--err)}.st.pending,.st.uploading{color:var(--warn)}
+.quick{width:100%;margin-top:10px;padding:12px 16px;border-radius:16px;display:grid;gap:2px;text-align:center}
+.quick b{font-size:17px}.quick small{color:var(--mute);font-size:13px}
+.st.processing{color:var(--warn)}.st.review{color:var(--acc);border:1px solid var(--acc)}
 .empty{text-align:center;color:var(--mute);padding:28px 12px}
 /* crop + pages */
 .dark{background:#0d0e11;color:#eee;--card:#1d2026;--line:#30343c;--ink:#eee;--mute:#a3a7ae}
@@ -145,6 +148,7 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
       </svg>
       <span><b>Dokument scannen</b><small>Kamera öffnen</small></span>
     </button>
+    <button id="btnQuick" class="quick"><b>⚡ Schnell-Scan</b><small>Nur fotografieren – Rest automatisch, später prüfbar</small></button>
     <div class="row">
       <button id="btnGallery">Aus der Galerie</button>
       <button id="btnSync">Jetzt hochladen</button>
@@ -286,6 +290,11 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     <p class="hint">Echte Azure-Abrechnung für alles rund um die KI (Modell, Funktion, Speicher). Azure liefert die Kosten mit 8–24 Stunden Verzögerung; die Zahl der KI-Analysen zählt Azure fast sofort.</p>
     <div class="row"><button id="sCostBtn">Kosten aktualisieren</button></div>
 
+    <h2>Schnell-Scan</h2>
+    <label for="sQuickDest">Ablage in OneDrive</label>
+    <select id="sQuickDest"><option value="target">Direkt in den passenden Ordner</option><option value="inbox">Erst in den Ordner „Eingang“, nach dem Prüfen verschieben</option></select>
+    <p class="hint">Schnell-Scans laufen ohne Rückfragen durch (Ecken, Filter, Texterkennung, KI, Name, Ordner, Upload) und erscheinen unter „Zu prüfen“. Dort kannst du sie bestätigen oder komplett nachbearbeiten – das Originalfoto bleibt bis dahin gespeichert.</p>
+
     <h2>Benennung und Ordner</h2>
     <label for="sPattern">Muster für den Dateinamen</label>
     <input id="sPattern" spellcheck="false">
@@ -348,7 +357,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27v';
+const VERSION='2026-11-27w';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -404,7 +413,7 @@ function cvWorker(){
   cvReady.catch(()=>{});return cvReady;
 }
 async function cvCall(op,args,transfer=[]){
-  if(!cvLoaded){const prev=$('#busyMsg').textContent;busy('Bildverarbeitung wird geladen … (einmalig ca. 10 MB)');await cvWorker();busy(prev)}
+  if(!cvLoaded){const vis=!$('#busy').hidden,prev=$('#busyMsg').textContent;if(vis)busy('Bildverarbeitung wird geladen … (einmalig ca. 10 MB)');await cvWorker();if(vis)busy(prev)}
   const t0=performance.now();
   return new Promise((res,rej)=>{const id=++cvSeq;cvPend.set(id,{res:v=>{log(`${op}: ${Math.round(performance.now()-t0)} ms`);res(v)},rej});cvW.postMessage({id,op,args},transfer)});
 }
@@ -594,7 +603,7 @@ cropCv.addEventListener('pointermove',e=>{if(ed.drag<0)return;const q=evPt(e),s=
 const endDrag=()=>{if(ed.drag>=0){ed.drag=-1;edDraw()}};cropCv.addEventListener('pointerup',endDrag);cropCv.addEventListener('pointercancel',endDrag);
 
 /* ---------- Scan-Ablauf ---------- */
-let pages=[],cur=0,editIdx=-1,meta=null;
+let pages=[],cur=0,editIdx=-1,meta=null,editDoc=null;
 function openCrop(p,idx){ed.p=p;editIdx=idx;$('#cropHint').textContent=p.detected?'Dokument erkannt – Ecken bei Bedarf verschieben.':'Kein Dokument sicher erkannt – bitte die vier Ecken auf die Blattecken ziehen.';nav('vCrop')}
 async function processCanvas(src,single){
   log(`Bild ${src.width}×${src.height}`);
@@ -614,7 +623,7 @@ async function onFiles(files){
 }
 
 /* ---------- Eingebaute Kamera (kein Wechsel in die System-Kamera-App) ---------- */
-let stream=null,track=null,torchOn=false;
+let stream=null,track=null,torchOn=false,quickMode=false;
 async function openCam(){
   cvWorker().catch(()=>{}); // Bildverarbeitung lädt im Hintergrund, während du zielst
   if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){log('Keine Kamera-API – System-Kamera');$('#fCam').click();return}
@@ -624,6 +633,7 @@ async function openCam(){
     track=stream.getVideoTracks()[0];const v=$('#camVid');v.srcObject=stream;await v.play().catch(()=>{});
     const caps=track.getCapabilities?track.getCapabilities():{};$('#camTorch').hidden=!caps.torch;torchOn=false;
     const st=track.getSettings?track.getSettings():{};log(`Kamera ${st.width}×${st.height}`);
+    $('.camhint').textContent=quickMode?'Schnell-Scan: Blatt ganz ins Bild nehmen – der Rest läuft automatisch.':'Blatt flach hinlegen, ganz ins Bild nehmen, ruhig halten.';
     nav('vCam');
   }catch(e){log('Kamera: '+e.name+' '+e.message);stopCam();
     toast(e.name==='NotAllowedError'?'Kein Kamerazugriff erlaubt – öffne die System-Kamera.':'Kamera nicht verfügbar – öffne die System-Kamera.');$('#fCam').click()}
@@ -642,6 +652,7 @@ async function shoot(){
     }
     if(!src){const v=$('#camVid');src=document.createElement('canvas');src.width=v.videoWidth;src.height=v.videoHeight;src.getContext('2d').drawImage(v,0,0)}
     stopCam();
+    if(quickMode){quickMode=false;nav('vHome');await quickStart(src);return}
     if(await processCanvas(src,true)){cur=pages.length-1;renderPages();nav('vPages')}
   }catch(e){console.error(e);toast(e.message||String(e),'err');if(view==='vCam')camBack()}
   finally{unbusy()}
@@ -658,7 +669,7 @@ function renderPages(){
   $('#autoHint').textContent=p.mode==='auto'?`· ${({color:'Farbe',bw:'S/W'})[p.auto]||''}`:'';
   $('#thumbs').innerHTML=pages.map((q,i)=>`<button data-i="${i}" aria-current="${i===cur}" aria-label="Seite ${i+1}"><img src="${esc(q.thumb)}" alt=""></button>`).join('');
 }
-function pgBack(){if(!pages.length||confirm('Diesen Scan verwerfen?')){pages=[];nav('vHome')}}
+function pgBack(){if(!pages.length||confirm(editDoc?'Bearbeitung abbrechen? Der Schnell-Scan bleibt unverändert.':'Diesen Scan verwerfen?')){pages=[];editDoc=null;nav('vHome')}}
 async function setMode(m){const p=pages[cur];if(!p||p.mode===m)return;p.mode=m;busy('Filter wird angewendet …');try{await enhance(p);p.ocrFor=null;renderPages()}catch(e){toast(e.message,'err')}finally{unbusy()}}
 
 /* ---------- Analyse ---------- */
@@ -692,6 +703,8 @@ async function runAnalysis(){
     a.date&&cfg.dateSrc!=='scan'?'Datum aus dem Dokument':'Scandatum verwendet',
     a.how==='gelernt'?'Ordner wie beim letzten Mal':a.folder==='Sonstiges'?'kein passender Ordner erkannt':'',
     `${n} ${n>1?'Seiten':'Seite'}`].filter(Boolean);
+  if(editDoc){const e=editDoc;$('#mtSender').value=e.sender||'';$('#mtType').value=e.type||'';$('#mtSubject').value=e.subject||'';$('#mtDate').value=e.date||date;
+    folderOptions(e.folder);meta.suggested=e.folder;meta.info.push('Werte vom Schnell-Scan');showMetaInfo('');refreshName();nav('vMeta');return}
   showMetaInfo(cfg.ai&&text.trim().length>20?'KI analysiert …':'');
   refreshName();nav('vMeta');
   if(cfg.ai&&text.trim().length>20)aiRefine(meta,text);
@@ -703,13 +716,9 @@ async function aiRefine(m,text){
     const j=await aiAnalyze(text,folderList());
     if(meta!==m||view!=='vMeta')return; // inzwischen gespeichert oder verlassen
     const set=(id,v)=>{if(v&&!m.touched[id]){$('#'+id).value=v;return true}return false};
-    const s=String(j.absender||'').trim().replace(/\s+(GmbH|AG|SE|KG|e\.\s?V\.|mbH|UG)(\s.*)?$/i,'');
-    let changed=0;
-    if(s&&s.length<60)changed+=set('mtSender',s);
-    const t=String(j.typ||'').trim();if(t&&t.length<40)changed+=set('mtType',t);
-    if(/^\d{4}-\d{2}-\d{2}$/.test(j.datum||'')&&cfg.dateSrc!=='scan'){const d=new Date(j.datum);if(d>new Date(1990,0,1)&&d<new Date(Date.now()+60*864e5))changed+=set('mtDate',j.datum)}
-    const b=String(j.betreff||'').trim().split(/\s+/).slice(0,4).join(' ');if(b)changed+=set('mtSubject',b);
-    let f=folderList().find(x=>x.toLowerCase()===String(j.ordner||'').trim().toLowerCase());
+    const k=aiNormalize(j);let changed=0;
+    changed+=set('mtSender',k.sender);changed+=set('mtType',k.type);changed+=set('mtDate',k.date);changed+=set('mtSubject',k.subject);
+    let f=k.folder;
     const key=$('#mtSender').value.trim().toLowerCase();if(key&&learn[key])f=learn[key];
     if(f&&!m.touched.mtFolder&&$('#mtFolder').value!=='__new'){folderOptions(f);m.suggested=f;changed++}
     refreshName();showMetaInfo(changed?'von der KI ergänzt ✓':'KI: keine Änderungen');
@@ -719,6 +728,14 @@ async function aiRefine(m,text){
     if(meta===m)showMetaInfo(note);toast(note+' ('+msg.slice(0,90)+')','err');
   }
 }
+
+// KI-Antwort prüfen und auf unsere Felder abbilden (leere Werte = nicht übernehmen)
+function aiNormalize(j){const r={};
+  const s=String(j.absender||'').trim().replace(/\s+(GmbH|AG|SE|KG|e\.\s?V\.|mbH|UG)(\s.*)?$/i,'');if(s&&s.length<60)r.sender=s;
+  const t=String(j.typ||'').trim();if(t&&t.length<40)r.type=t;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(j.datum||'')&&cfg.dateSrc!=='scan'){const d=new Date(j.datum);if(d>new Date(1990,0,1)&&d<new Date(Date.now()+60*864e5))r.date=j.datum}
+  const b=String(j.betreff||'').trim().split(/\s+/).slice(0,4).join(' ');if(b)r.subject=b;
+  r.folder=folderList().find(x=>x.toLowerCase()===String(j.ordner||'').trim().toLowerCase());return r}
 
 /* ---------- Papierformat schätzen ---------- */
 const FORMATS={A4:[210,297],A5:[148,210],A6:[105,148],Letter:[215.9,279.4],'DIN lang':[99,210],Visitenkarte:[55,85]};
@@ -732,8 +749,8 @@ function estimateFormat(p){
   for(const id of['Letter','DIN lang','Visitenkarte']){const[w,h]=FORMATS[id];if(Math.abs(r-h/w)/(h/w)<.05&&(est==null?id==='Letter':est/w>.7&&est/w<1.4))return{id,w,h,land,est}}
   const w=est!=null?Math.min(297,Math.max(40,est)):210;return{id:'Geschätzt',w,h:w*r,land,est};
 }
-function pageMM(p){
-  const sel=$('#mtFormat').value,f=sel!=='auto'&&FORMATS[sel]?{w:FORMATS[sel][0],h:FORMATS[sel][1]}:(p.fmt||estimateFormat(p));
+function pageMM(p,sel=$('#mtFormat').value){
+  const f=sel!=='auto'&&FORMATS[sel]?{w:FORMATS[sel][0],h:FORMATS[sel][1]}:(p.fmt||estimateFormat(p));
   const land=p.out.width>p.out.height;return land?[f.h,f.w]:[f.w,f.h];
 }
 
@@ -799,10 +816,10 @@ function refreshName(){if(!meta)return;if(!meta.nameEdited)$('#mtName').value=bu
   $('#mtPath').textContent=['OneDrive',cfg.base,curFolder()].filter(Boolean).join(' › ')}
 
 /* ---------- PDF ---------- */
-async function makePdf(name,m){
+async function makePdf(name,m,pg=pages,sel=$('#mtFormat').value){
   await loadScript(PDF_URL);const{jsPDF}=window.jspdf;let doc=null;
-  for(const p of pages){
-    const land=p.out.width>p.out.height,[wmm,hmm]=pageMM(p).map(v=>+v.toFixed(2));
+  for(const p of pg){
+    const land=p.out.width>p.out.height,[wmm,hmm]=pageMM(p,sel).map(v=>+v.toFixed(2));
     if(!doc)doc=new jsPDF({unit:'mm',format:[wmm,hmm],orientation:land?'l':'p',compress:true});else doc.addPage([wmm,hmm],land?'l':'p');
     const bg=document.createElement('canvas');bg.width=p.out.width;bg.height=p.out.height;const x=bg.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,bg.width,bg.height);x.drawImage(p.out,0,0);
     doc.addImage(bg.toDataURL('image/jpeg',cfg.quality),'JPEG',0,0,wmm,hmm,undefined,'FAST');
@@ -818,11 +835,12 @@ async function saveDoc(){
   busy('PDF wird erstellt …');
   try{
     const pdf=await makePdf(name,{type,sender,folder});
-    const rec={id:crypto.randomUUID(),name,folder,date:$('#mtDate').value,created:Date.now(),pdf,size:pdf.size,thumb:pages[0].thumb,pages:pages.length,status:'pending',text:meta.text.slice(0,6000),sender,type};
+    const rec={id:crypto.randomUUID(),name,folder,date:$('#mtDate').value,created:Date.now(),pdf,size:pdf.size,thumb:pages[0].thumb,pages:pages.length,status:'pending',text:meta.text.slice(0,6000),sender,type,subject:$('#mtSubject').value.trim()};
+    if(editDoc){rec.id=editDoc.id;rec.created=editDoc.created;rec.quick=true;rec.replaceItemId=editDoc.itemId||null}
     await putDoc(rec);
     if(sender&&(folder!==meta.suggested||meta.how==='gelernt')){learn[sender.toLowerCase()]=folder;save('learn',learn)}
     if($('#mtFolder').value==='__new'){cfg.extraFolders=[...new Set([...(cfg.extraFolders||[]),folder])];save('cfg',cfg)}
-    pages=[];meta=null;nav('vHome');renderList();toast(`Gespeichert: ${name}.pdf`,'ok');
+    pages=[];meta=null;editDoc=null;nav('vHome');renderList();toast(`Gespeichert: ${name}.pdf`,'ok');
     if(cfg.autoUpload)syncAll();
     try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch{}
   }catch(e){console.error(e);toast('Speichern fehlgeschlagen: '+e.message,'err')}finally{unbusy()}
@@ -875,7 +893,10 @@ async function ensureFolders(segs){let par=[];
       if(!c.ok&&c.status!==409)throw await gerr(c)}else if(!r.ok)throw await gerr(r);
     par=curP}}
 async function uploadDoc(d){
-  const segs=[...String(cfg.base||'').split('/'),...String(d.folder||'').split('/')].map(s=>s.trim()).filter(Boolean);
+  if(d.replaceItemId){ // nachbearbeiteter Schnell-Scan: alte Fassung in OneDrive entfernen
+    const r=await gfetch(`${G}/me/drive/items/${encodeURIComponent(d.replaceItemId)}`,{method:'DELETE'});
+    if(!r.ok&&r.status!==404)throw await gerr(r);d.replaceItemId=null;await putDoc(d)}
+  const segs=[...String(cfg.base||'').split('/'),...String(d.upFolder||d.folder||'').split('/')].map(s=>s.trim()).filter(Boolean);
   const p=encPath([...segs,d.name+'.pdf']);
   if(d.pdf.size<3.9e6){
     const put=()=>gfetch(`${G}/me/drive/root:/${p}:/content?@microsoft.graph.conflictBehavior=rename`,{method:'PUT',headers:{'Content-Type':'application/pdf'},body:d.pdf});
@@ -897,23 +918,87 @@ async function syncAll(manual){
   try{const docs=(await allDocs()).filter(d=>d.status!=='uploaded'&&d.pdf).sort((a,b)=>a.created-b.created);
     if(!docs.length&&manual)toast('Alles ist hochgeladen.','ok');
     for(const d of docs){d.status='uploading';await putDoc(d);renderList();
-      try{const it=await uploadDoc(d);d.status='uploaded';d.webUrl=it.webUrl;d.remoteName=it.name;d.err='';if(cfg.dropLocal)d.pdf=null;okN++}
+      try{const it=await uploadDoc(d);d.status='uploaded';d.webUrl=it.webUrl;d.remoteName=it.name;d.itemId=it.id;d.err='';if(cfg.dropLocal)d.pdf=null;okN++}
       catch(e){d.status='error';d.err=e.message;await putDoc(d);if(e.auth){renderOd();break}continue}
       await putDoc(d)}
     if(okN)toast(okN===1?'Nach OneDrive hochgeladen':`${okN} Scans nach OneDrive hochgeladen`,'ok');
   }catch(e){toast(e.message,'err')}finally{syncing=false;renderList();renderOd();applyUpdate()}
 }
 
+/* ---------- Schnell-Scan: Foto → alles automatisch → „Zu prüfen“ ---------- */
+let quickQ=Promise.resolve(),quickN=0;
+const toBlob=(c,q=.85)=>new Promise(r=>c.toBlob(r,'image/jpeg',q));
+async function quickStart(src){
+  const rec={id:crypto.randomUUID(),name:'Schnell-Scan wird verarbeitet …',folder:'',date:today(),created:Date.now(),pdf:null,size:0,thumb:smallJpeg(src,160),pages:1,status:'processing',review:true,quick:true,
+    draft:{pages:[{src:await toBlob(src),corners:null,mode:'auto',rot:0}]}};
+  await putDoc(rec);quickN++;renderList();toast('Schnell-Scan läuft im Hintergrund …');
+  quickQ=quickQ.then(()=>quickProcess(rec,src)).finally(()=>{quickN--;applyUpdate()});
+}
+async function quickProcess(rec,src){
+  const t0=performance.now();
+  try{
+    const found=await detectDoc(src);
+    const p={src,corners:found||defaultCorners(src),detected:!!found,mode:'auto',rot:0};
+    await warpPage(p);await enhance(p);rec.draft.pages[0].corners=p.corners;rec.thumb=p.thumb;
+    let text='';
+    try{const w=await getOCR();const{data}=await w.recognize(p.out);text=data.text||'';
+      p.text=text;p.words=(data.words||[]).filter(x=>x.confidence>35&&x.text.trim()).map(x=>({t:x.text,b:x.bbox}));p.ocrFor=p.out}
+    catch(e){log('Schnell-Scan Texterkennung: '+errMsg(e))}
+    p.fmt=estimateFormat(p);
+    const a=analyze(text,parseCats(cfg.cats),learn);
+    const m={date:cfg.dateSrc==='scan'||!a.date?today():a.date,type:a.type,sender:a.sender,subject:a.subject||'',folder:a.folder};
+    let how='Regeln';
+    if(cfg.ai&&text.trim().length>20){try{const k=aiNormalize(await aiAnalyze(text,folderList()));
+        for(const f of['sender','type','date','subject','folder'])if(k[f])m[f]=k[f];how='KI'}
+      catch(e){log('Schnell-Scan KI: '+errMsg(e));how='Regeln (KI nicht erreichbar)'}}
+    const lf=m.sender&&learn[m.sender.toLowerCase()];if(lf)m.folder=lf;
+    const name=cleanPart(buildName(cfg.pattern,m))||buildName(cfg.pattern,{date:today()});
+    const pdf=await makePdf(name,m,[p],'auto');
+    Object.assign(rec,{name,folder:m.folder,date:m.date,sender:m.sender,type:m.type,subject:m.subject,pdf,size:pdf.size,text:text.slice(0,6000),status:'pending',err:'',
+      upFolder:cfg.quickDest==='inbox'?'Eingang':null,how});
+    await putDoc(rec);log(`Schnell-Scan fertig in ${((performance.now()-t0)/1000).toFixed(1)} s (${how}): ${name}`);
+    toast(`Schnell-Scan: ${name}`,'ok');renderList();if(cfg.autoUpload)syncAll();
+  }catch(e){console.error(e);const msg=errMsg(e);log('Schnell-Scan fehlgeschlagen: '+msg);
+    Object.assign(rec,{status:'error',err:'Verarbeitung: '+msg,name:'Schnell-Scan – bitte bearbeiten'});await putDoc(rec);renderList();toast('Schnell-Scan fehlgeschlagen – unter „Zu prüfen“ bearbeiten','err')}
+}
+// „Passt so“: Prüfmarke weg, ggf. aus „Eingang“ in den Zielordner verschieben, Originalfoto löschen
+async function quickConfirm(d){
+  try{
+    if(d.upFolder){
+      if(d.status==='uploaded'&&d.itemId){busy('Wird in den Zielordner verschoben …');
+        const segs=[...String(cfg.base||'').split('/'),...String(d.folder||'').split('/')].map(s=>s.trim()).filter(Boolean);await ensureFolders(segs);
+        const r=await gfetch(`${G}/me/drive/items/${encodeURIComponent(d.itemId)}?@microsoft.graph.conflictBehavior=rename`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({parentReference:{path:'/drive/root:/'+segs.join('/')}})});
+        if(!r.ok)throw await gerr(r);const it=await r.json();d.webUrl=it.webUrl;d.remoteName=it.name}
+      d.upFolder=null}
+    d.review=false;delete d.draft;await putDoc(d);
+    if(d.sender&&d.folder){learn[d.sender.toLowerCase()]=d.folder;save('learn',learn)}
+    toast('Bestätigt','ok');
+  }catch(e){toast('Verschieben fehlgeschlagen: '+errMsg(e),'err');if(e.auth)renderOd()}
+  finally{unbusy();renderList()}
+}
+// „Bearbeiten“: Originalfoto mit den gespeicherten Ecken wieder in den normalen Ablauf laden
+async function quickEdit(d){
+  busy('Schnell-Scan wird geöffnet …');
+  try{pages=[];
+    for(const q of d.draft.pages){const src=await fileToCanvas(q.src);
+      const p={src,corners:q.corners||(await detectDoc(src))||defaultCorners(src),detected:true,mode:q.mode||'auto',rot:q.rot||0};
+      await warpPage(p);await enhance(p);pages.push(p)}
+    editDoc=d;cur=0;renderPages();nav('vPages');toast('Ecken, Filter, Seiten anpassen – dann „Fertig“.')}
+  catch(e){console.error(e);pages=[];editDoc=null;toast('Öffnen fehlgeschlagen: '+errMsg(e),'err')}
+  finally{unbusy()}
+}
+
 /* ---------- Startseite ---------- */
 let chip='';
 const fmtD=t=>new Date(t).toLocaleDateString('de-DE',{day:'2-digit',month:'2-digit',year:'numeric'});
-const ST={pending:'wartet',uploading:'lädt …',uploaded:'OneDrive',error:'Fehler'};
+const ST={pending:'wartet',uploading:'lädt …',uploaded:'OneDrive',error:'Fehler',processing:'verarbeitet …'};
 async function renderList(){
   const docs=(await allDocs().catch(()=>[])).sort((a,b)=>b.created-a.created),q=$('#search').value.trim().toLowerCase();
-  const folders=[...new Set(docs.map(d=>d.folder))].sort((a,b)=>a.localeCompare(b,'de'));if(chip&&!folders.includes(chip))chip='';
-  $('#chips').innerHTML=docs.length?[['','Alle'],...folders.map(f=>[f,f])].map(([v,l])=>`<button data-f="${esc(v)}" aria-pressed="${v===chip}">${esc(l)}</button>`).join(''):'';
-  const f=docs.filter(d=>(!chip||d.folder===chip)&&(!q||`${d.name} ${d.folder} ${d.text||''}`.toLowerCase().includes(q)));
-  $('#list').innerHTML=f.length?f.map(d=>`<li><button class="doc" data-id="${esc(d.id)}"><img src="${esc(d.thumb)}" alt=""><span><b>${esc(d.name)}</b><small>${esc(d.folder)} · ${d.pages} S. · ${fmtD(d.created)}</small></span><i class="st ${esc(d.status)}">${ST[d.status]||''}</i></button></li>`).join('')
+  const folders=[...new Set(docs.map(d=>d.folder))].sort((a,b)=>a.localeCompare(b,'de'));if(chip&&chip!=='__review'&&!folders.includes(chip))chip='';
+  const nRev=docs.filter(d=>d.review).length;if(chip==='__review'&&!nRev)chip='';
+  $('#chips').innerHTML=docs.length?[['','Alle'],...(nRev?[['__review',`Zu prüfen (${nRev})`]]:[]),...folders.map(f=>[f,f])].map(([v,l])=>`<button data-f="${esc(v)}" aria-pressed="${v===chip}">${esc(l)}</button>`).join(''):'';
+  const f=docs.filter(d=>(!chip||(chip==='__review'?d.review:d.folder===chip))&&(!q||`${d.name} ${d.folder} ${d.text||''}`.toLowerCase().includes(q)));
+  $('#list').innerHTML=f.length?f.map(d=>`<li><button class="doc" data-id="${esc(d.id)}"><img src="${esc(d.thumb)}" alt=""><span><b>${esc(d.name)}</b><small>${esc(d.upFolder&&d.review?'Eingang → '+d.folder:d.folder)} · ${d.pages} S. · ${fmtD(d.created)}</small></span>${d.review&&d.status!=='processing'?'<i class="st review">prüfen</i>':`<i class="st ${esc(d.status)}">${ST[d.status]||''}</i>`}</button></li>`).join('')
     :`<li class="empty">${docs.length?'Keine Treffer.':'Noch keine Scans. Tippe oben auf „Dokument scannen“ – die App findet das Blatt, richtet es gerade, benennt es und legt es in den passenden Ordner.'}</li>`;
   const pend=docs.filter(d=>d.status!=='uploaded'&&d.pdf).length;
   $('#btnSync').textContent=pend?`Jetzt hochladen (${pend})`:'Jetzt hochladen';$('#reauthN').textContent=pend?`${pend} Scan${pend>1?'s warten':' wartet'} auf den Upload.`:'';
@@ -927,15 +1012,18 @@ async function openDoc(id){
   const d=await getDoc(id);if(!d)return;const dlg=$('#docDlg');
   $('#dlgTitle').textContent=d.name+'.pdf';$('#dlgSub').textContent=`${[cfg.base,d.folder].filter(Boolean).join(' › ')} · ${d.pages} S. · ${d.size?Math.round(d.size/1024)+' KB':''}${d.err&&d.status==='error'?' · '+d.err:''}`;
   const acts=[];
+  if(d.review&&d.status!=='processing'){if(d.status!=='error'||d.pdf)acts.push(['ok','Passt so ✓']);if(d.draft)acts.push(['edit','Bearbeiten'])}
   if(d.pdf){acts.push(['share','Teilen …'],['dl','Herunterladen'])}
   if(d.webUrl)acts.push(['open','In OneDrive ansehen'],['app','OneDrive-App starten']);
   if(d.pdf&&d.status!=='uploading')acts.push(['up',d.status==='uploaded'?'Erneut hochladen':'Hochladen']);
   acts.push(['del','Auf diesem Gerät löschen'],['close','Schließen']);
-  $('#dlgActs').innerHTML=acts.map(([k,l])=>k==='open'?`<button data-a="open" class="pri">${l}</button>`:`<button data-a="${k}">${l}</button>`).join('');
+  $('#dlgActs').innerHTML=acts.map(([k,l])=>k==='open'&&!d.review||k==='ok'?`<button data-a="open" class="pri">${l}</button>`:`<button data-a="${k}">${l}</button>`).join('');
   $('#dlgActs').onclick=async e=>{const a=e.target.closest('button')?.dataset.a;if(!a)return;
     const file=d.pdf?new File([d.pdf],d.name+'.pdf',{type:'application/pdf'}):null;
     if(a==='share'){try{if(navigator.canShare&&navigator.canShare({files:[file]}))await navigator.share({files:[file],title:d.name});else toast('Teilen wird hier nicht unterstützt – nutze „Herunterladen“.')}catch{}}
     else if(a==='dl'){const u=URL.createObjectURL(file),l=document.createElement('a');l.href=u;l.download=file.name;document.body.append(l);l.click();l.remove();setTimeout(()=>URL.revokeObjectURL(u),4000)}
+    else if(a==='ok'){dlg.close();await quickConfirm(d)}
+    else if(a==='edit'){dlg.close();await quickEdit(d)}
     else if(a==='open'){window.open(d.webUrl,'_blank','noopener')}
     else if(a==='app'){openOneDriveApp(d.webUrl)}
     else if(a==='up'){d.status='pending';await putDoc(d);dlg.close();syncAll(true)}
@@ -949,14 +1037,14 @@ function openSettings(){
   $('#sClient').value=cfg.clientId;$('#sTenant').value=cfg.tenant;$('#sRedirect').textContent=redirectUri();$('#sBase').value=cfg.base;
   $('#sAuto').checked=cfg.autoUpload;$('#sDrop').checked=cfg.dropLocal;$('#sFormat').value=cfg.format;$('#sReview').checked=cfg.review;
   $('#sQual').value=cfg.quality;$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';$('#sPattern').value=cfg.pattern;$('#sDateSrc').value=cfg.dateSrc;$('#sCats').value=cfg.cats;
-  $('#sAi').checked=cfg.ai;$('#sAiModel').innerHTML=Object.entries(AI_MODELS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('');$('#sAiModel').value=cfg.aiModel;$('#sAiUrl').value=cfg.aiUrl||'';$('#sRedact').checked=cfg.redact;$('#sRedactNames').value=cfg.redactNames||'';aiStatus();$('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
+  $('#sQuickDest').value=cfg.quickDest||'target';$('#sAi').checked=cfg.ai;$('#sAiModel').innerHTML=Object.entries(AI_MODELS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('');$('#sAiModel').value=cfg.aiModel;$('#sAiUrl').value=cfg.aiUrl||'';$('#sRedact').checked=cfg.redact;$('#sRedactNames').value=cfg.redactNames||'';aiStatus();$('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
   (async()=>{try{const e=await navigator.storage.estimate();const n=(await allDocs()).length;$('#sStore').textContent=`${n} Scans, ca. ${(e.usage/1048576).toFixed(1)} MB belegt (inkl. Texterkennungs- und Bildverarbeitungsdaten).`}catch{$('#sStore').textContent=''}})();
   if(cfg.ai&&cfg.aiUrl)loadCosts();else $('#sCost').textContent='KI ist ausgeschaltet.';
   nav('vSet');
 }
 function readSettings(){
   cfg.clientId=$('#sClient').value.trim();cfg.tenant=$('#sTenant').value;cfg.base=cleanFolder($('#sBase').value);cfg.autoUpload=$('#sAuto').checked;cfg.dropLocal=$('#sDrop').checked;
-  cfg.format=$('#sFormat').value;cfg.review=$('#sReview').checked;cfg.quality=+$('#sQual').value;cfg.pattern=$('#sPattern').value.trim()||DEF.pattern;cfg.dateSrc=$('#sDateSrc').value;cfg.cats=$('#sCats').value;cfg.ai=$('#sAi').checked;cfg.aiModel=$('#sAiModel').value||cfg.aiModel;cfg.aiUrl=$('#sAiUrl').value.trim();cfg.redact=$('#sRedact').checked;cfg.redactNames=$('#sRedactNames').value;
+  cfg.quickDest=$('#sQuickDest').value;cfg.format=$('#sFormat').value;cfg.review=$('#sReview').checked;cfg.quality=+$('#sQual').value;cfg.pattern=$('#sPattern').value.trim()||DEF.pattern;cfg.dateSrc=$('#sDateSrc').value;cfg.cats=$('#sCats').value;cfg.ai=$('#sAi').checked;cfg.aiModel=$('#sAiModel').value||cfg.aiModel;cfg.aiUrl=$('#sAiUrl').value.trim();cfg.redact=$('#sRedact').checked;cfg.redactNames=$('#sRedactNames').value;
   save('cfg',cfg);$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';
 }
 async function aiStatus(){$('#sAiInfo').textContent=cfg.aiUrl?'':'Noch nicht eingerichtet: Adresse der Azure-Funktion fehlt.'}
@@ -968,7 +1056,8 @@ function openOneDriveApp(url){
 function closeSettings(){readSettings();renderOd();nav('vHome')}
 
 /* ---------- Ereignisse ---------- */
-$('#btnScan').onclick=openCam;
+$('#btnScan').onclick=()=>{quickMode=false;openCam()};
+$('#btnQuick').onclick=()=>{quickMode=true;openCam()};
 $('#camShot').onclick=shoot;
 $('#camClose').onclick=camBack;
 $('#camGal').onclick=()=>{camBack();$('#fGal').click()};
@@ -999,7 +1088,8 @@ $('#btnGallery').onclick=()=>{$('#fGal').click()};
 $('#btnSync').onclick=()=>syncAll(true);
 $('#btnReauth').onclick=login;
 $('#btnSettings').onclick=openSettings;
-$('#fCam').onchange=e=>{const f=e.target.files;log('System-Kamera: '+(f?f.length:0)+' Bild');if(f&&f.length)onFiles(f);e.target.value=''};
+$('#fCam').onchange=async e=>{const f=e.target.files;log('System-Kamera: '+(f?f.length:0)+' Bild');
+  if(f&&f.length){if(quickMode){quickMode=false;try{await quickStart(await fileToCanvas(f[0]))}catch(er){toast(errMsg(er),'err')}}else onFiles(f)}e.target.value=''};
 $('#fGal').onchange=e=>{const f=e.target.files;if(f&&f.length)onFiles(f);e.target.value=''};
 $('#search').oninput=renderList;
 $('#chips').onclick=e=>{const b=e.target.closest('button');if(b){chip=b.dataset.f;renderList()}};
@@ -1052,7 +1142,7 @@ async function checkUpdate(force){
   catch(e){log('Update-Prüfung: '+e.message)}
 }
 function applyUpdate(){ // nur neu laden, wenn gerade nichts in Arbeit ist (Startseite, kein Upload, kein Dialog)
-  if(!updatePending||view!=='vHome'||!$('#busy').hidden||$('#docDlg').open||syncing)return;
+  if(!updatePending||view!=='vHome'||!$('#busy').hidden||$('#docDlg').open||syncing||quickN)return;
   updatePending=false;toast('Neue Version wird geladen …');setTimeout(()=>location.reload(),700);
 }
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)checkUpdate()});
@@ -1061,7 +1151,9 @@ setInterval(()=>checkUpdate(true),10*60*1000);
 /* ---------- Start ---------- */
 (async()=>{
   if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
-  await handleRedirect();renderOd();await renderList();
+  await handleRedirect();renderOd();
+  try{for(const d of await allDocs())if(d.status==='processing'){d.status='error';d.err='Verarbeitung abgebrochen';d.name='Schnell-Scan – bitte bearbeiten';await putDoc(d)}}catch{}
+  await renderList();
   if(cfg.autoUpload)syncAll();
   log('App gestartet, Version '+VERSION+(isStandalone()?' (installiert)':' (Browser)'));
   setTimeout(()=>checkUpdate(true),3000);

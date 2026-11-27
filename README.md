@@ -12,6 +12,8 @@ Eine Web-App (PWA), die du auf Android wie eine normale App installierst:
 8. **PDF** – durchsuchbar (unsichtbare Textebene), Name z. B. `2026-11-03_Rechnung_Telekom_Mobilfunk-November.pdf`
 9. **Ablage** – lokal in der App und automatisch in OneDrive unter `Scans/<Ordner>/`
 
+**Schnell-Scan (⚡):** Nur fotografieren – Ecken, Filter, Texterkennung, KI, Name, Ordner und Upload laufen ohne Rückfragen im Hintergrund. Der Scan erscheint unter „Zu prüfen“: *Passt so ✓* bestätigt ihn, *Bearbeiten* öffnet das Originalfoto mit den erkannten Ecken im normalen Ablauf; beim Speichern wird die alte Fassung in OneDrive ersetzt. Einstellung „Ablage“: direkt in den Zielordner oder erst nach `Scans/Eingang` und beim Bestätigen verschieben. Das Originalfoto bleibt bis zum Bestätigen auf dem Handy.
+
 Die Bilder und Texte verlassen das Handy nur beim Upload in dein eigenes OneDrive.
 
 ---
