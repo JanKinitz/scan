@@ -7,7 +7,7 @@ Eine Web-App (PWA), die du auf Android wie eine normale App installierst:
 3. **Entzerren** – perspektivisch gerade gerichtet und auf A4 gebracht (einstellbar: immer A4 / automatisch / Originalproportion)
 4. **Auto-Filter** – erkennt Farbe; reine Textseiten → Schwarz-Weiß, farbige → Farbe. Der Hintergrund wird jeweils herausgerechnet, damit das Papier reinweiß ist und kein Grauschleier bleibt. Manuell: Farbe, Graustufen, S/W, Original
 5. **Texterkennung** (Tesseract, Deutsch + Englisch, läuft auf dem Handy)
-6. **Analyse** – Datum, Dokumentart, Absender, Betreff und Themenordner per Regeln (lernt aus deinen Korrekturen) und optional per **KI über Azure OpenAI**: Die App schickt nur gekürzten, geschwärzten Text an deine eigene Azure-Funktion (`relay/`), die ihn an GitHub Models weiterreicht
+6. **Analyse** – Datum, Dokumentart, Absender, Betreff und Themenordner per Regeln (lernt aus deinen Korrekturen) und optional per **KI über Azure OpenAI**: Die App schickt nur gekürzten, geschwärzten Text an deine eigene Azure-Funktion (`relay/`), die ihn an dein Azure-OpenAI-Modell weiterreicht
 7. **Papierformat** – Seitenverhältnis wird aus der Perspektive berechnet, die Größe (A4, A5, A6, Letter, DIN lang …) über die Schriftgröße geschätzt; im Ablegen-Schritt änderbar
 8. **PDF** – durchsuchbar (unsichtbare Textebene), Name z. B. `2026-11-03_Rechnung_Telekom_Mobilfunk-November.pdf`
 9. **Ablage** – lokal in der App und automatisch in OneDrive unter `Scans/<Ordner>/`
