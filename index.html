@@ -331,10 +331,10 @@ Schule und Kita: schule, kita, kindergarten, klasse, klassenlehrerin, elternbrie
 Kaufbelege und Garantie: kassenbon, quittung, garantie, gewährleistung, bestellung, lieferschein, kaufbeleg, bestellnummer, artikelnummer, retoure`;
 
 const AI_MODEL_IDS=['openai/gpt-4o-mini','openai/gpt-4.1-mini','openai/gpt-4.1-nano'];
-const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{betreff}_{absender}',dateSrc:'doc',cats:DEFAULT_CATS,ai:false,aiModel:'openai/gpt-4o-mini',aiUrl:'',redact:true,redactNames:''};
+const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{betreff}_{absender}',dateSrc:'doc',cats:DEFAULT_CATS,ai:false,aiModel:'openai/gpt-4o-mini',aiUrl:'https://jankinitz-scan-ki-hsa8fkdubvdcc0ft.swedencentral-01.azurewebsites.net/api/analyze',redact:true,redactNames:''};
 const load=(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v??d}catch{return d}};
 const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};
-let cfg={...DEF,...load('cfg',{})};if(!AI_MODEL_IDS.includes(cfg.aiModel))cfg.aiModel=DEF.aiModel;if(!cfg.aiUrl)cfg.ai=false;if(!cfg.clientId)cfg.clientId=DEF.clientId;if(['{datum}_{typ}_{absender}','{datum}_{typ}_{absender}_{betreff}'].includes(cfg.pattern))cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';
+let cfg={...DEF,...load('cfg',{})};if(!AI_MODEL_IDS.includes(cfg.aiModel))cfg.aiModel=DEF.aiModel;if(!cfg.aiUrl)cfg.aiUrl=DEF.aiUrl;if(!cfg.clientId)cfg.clientId=DEF.clientId;if(['{datum}_{typ}_{absender}','{datum}_{typ}_{absender}_{betreff}'].includes(cfg.pattern))cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';
 let learn=load('learn',{});   // absender-schlüssel -> ordner
 let tok=load('tok',{});
 
@@ -344,7 +344,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27q';
+const VERSION='2026-11-27r';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
