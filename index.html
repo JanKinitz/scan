@@ -274,8 +274,8 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     <label for="sAiModel">Modell</label>
     <select id="sAiModel">
       <option value="small">Klein – schnell, ca. 0,3 GB Download</option>
-      <option value="std">Standard – ca. 0,9 GB Download</option>
-      <option value="big">Genau – ca. 1,8 GB, nur für starke Handys</option>
+      <option value="std">Standard – ca. 0,9 GB Download (empfohlen)</option>
+      <option value="big">Groß – ca. 1,8 GB, für die meisten Handys zu groß</option>
     </select>
     <p class="hint">Der Dokumenttext verlässt das Gerät nicht. Aus dem Internet wird nur einmalig das Modell geladen (von Hugging Face), danach läuft die KI offline. Braucht ein Handy mit WebGPU-fähiger Grafik.</p>
     <p id="sAiInfo" class="mute" style="font-size:14px;margin:8px 0 0"></p>
@@ -332,7 +332,7 @@ Kaufbelege und Garantie: kassenbon, quittung, garantie, gewährleistung, bestell
 const DEF={clientId:'32d0ec14-246f-414e-8b4c-585c6d30a421',tenant:'common',base:'Scans',autoUpload:true,dropLocal:false,format:'auto',review:true,quality:0.8,pattern:'{datum}_{typ}_{betreff}_{absender}',dateSrc:'doc',cats:DEFAULT_CATS,ai:false,aiModel:'std'};
 const load=(k,d)=>{try{const v=JSON.parse(localStorage.getItem(k));return v??d}catch{return d}};
 const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}};
-let cfg={...DEF,...load('cfg',{})};if(!cfg.clientId)cfg.clientId=DEF.clientId;if(['{datum}_{typ}_{absender}','{datum}_{typ}_{absender}_{betreff}'].includes(cfg.pattern))cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';
+let cfg={...DEF,...load('cfg',{})};if(!cfg.clientId)cfg.clientId=DEF.clientId;if(['{datum}_{typ}_{absender}','{datum}_{typ}_{absender}_{betreff}'].includes(cfg.pattern))cfg.pattern=DEF.pattern;if(cfg.format==='orig')cfg.format='auto';if(cfg.aiModel==='big'&&!cfg.aiMig1){cfg.aiModel='std';cfg.aiMig1=true;save('cfg',cfg)} // großes Modell lief auf dem Handy nicht stabil
 let learn=load('learn',{});   // absender-schlüssel -> ordner
 let tok=load('tok',{});
 
@@ -342,7 +342,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27h';
+const VERSION='2026-11-27i';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -610,6 +610,7 @@ async function onFiles(files){
 let stream=null,track=null,torchOn=false;
 async function openCam(){
   cvWorker().catch(()=>{}); // Bildverarbeitung lädt im Hintergrund, während du zielst
+  if(cfg.ai&&!aiEngine&&!aiLoading)setTimeout(()=>getAI().catch(e=>log('KI-Vorladen: '+errMsg(e))),1500); // KI-Modell ebenfalls vorladen
   if(!(navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)){log('Keine Kamera-API – System-Kamera');$('#fCam').click();return}
   busy('Kamera wird gestartet …');
   try{
@@ -675,29 +676,46 @@ async function runAnalysis(){
   pages.forEach(p=>{p.fmt=estimateFormat(p);log(`Format Seite: ${p.fmt.id} (${Math.round(p.fmt.w)}×${Math.round(p.fmt.h)} mm${p.fmt.est?', Text-Schätzung '+Math.round(p.fmt.est)+' mm':''})`)});
   const text=pages.map(p=>p.text||'').join('\n\n');
   const cats=parseCats(cfg.cats),a=analyze(text,cats,learn);
-  if(cfg.ai&&text.trim().length>20){
-    try{const j=await aiAnalyze(text,folderList());
-      const s=String(j.absender||'').trim();if(s&&s.length<60)a.sender=s.replace(/\s+(GmbH|AG|SE|KG|e\.\s?V\.|mbH|UG)(\s.*)?$/i,'');
-      const t=String(j.typ||'').trim();if(t&&t.length<40)a.type=t;
-      if(/^\d{4}-\d{2}-\d{2}$/.test(j.datum||'')){const d=new Date(j.datum);if(d>new Date(1990,0,1)&&d<new Date(Date.now()+60*864e5))a.date=j.datum}
-      a.subject=String(j.betreff||'').trim().split(/\s+/).slice(0,5).join(' ');
-      const f=folderList().find(x=>x.toLowerCase()===String(j.ordner||'').trim().toLowerCase());if(f)a.folder=f;
-      a.how='KI';
-      const key=a.sender.toLowerCase();if(key&&learn[key]){a.folder=learn[key];a.how='gelernt'}
-    }catch(e){console.error(e);log('KI-Fehler Details: '+errMsg(e)+(e&&e.stack?' | '+String(e.stack).split('\n').slice(0,3).join(' / '):''));toast('KI-Analyse nicht möglich: '+errMsg(e)+' – Regeln verwendet.','err')}
-  }
   unbusy();
   const date=cfg.dateSrc==='scan'||!a.date?today():a.date;
-  meta={...a,date,suggested:a.folder,text,nameEdited:false};
+  meta={...a,date,suggested:a.folder,text,nameEdited:false,touched:{}};
   $('#mtThumb').src=pages[0].thumb;$('#mtSender').value=a.sender;$('#mtType').value=a.type;$('#mtSubject').value=a.subject||'';$('#mtDate').value=date;
   const f0=pages[0].fmt;$('#mtFormat').value='auto';$('#mtFormat').options[0].textContent=`Automatisch (${f0.id==='Geschätzt'?`ca. ${Math.round(f0.w)}×${Math.round(f0.h)} mm`:f0.id})`;
   folderOptions(a.folder);$('#mtText').textContent=text.trim()||'(kein Text erkannt)';
-  const info=[];info.push(failed?'Ohne Texterkennung':`${text.trim().split(/\s+/).filter(Boolean).length} Wörter erkannt`);
-  if(a.how==='KI')info.push('von der KI eingeordnet');
-  info.push(a.date&&cfg.dateSrc!=='scan'?'Datum aus dem Dokument':'Scandatum verwendet');
-  if(a.how==='gelernt')info.push('Ordner wie beim letzten Mal');else if(a.folder==='Sonstiges')info.push('kein passender Ordner erkannt');
-  info.push(`${n} ${n>1?'Seiten':'Seite'}`);$('#mtInfo').textContent=info.join(' · ');
+  meta.info=[failed?'Ohne Texterkennung':`${text.trim().split(/\s+/).filter(Boolean).length} Wörter erkannt`,
+    a.date&&cfg.dateSrc!=='scan'?'Datum aus dem Dokument':'Scandatum verwendet',
+    a.how==='gelernt'?'Ordner wie beim letzten Mal':a.folder==='Sonstiges'?'kein passender Ordner erkannt':'',
+    `${n} ${n>1?'Seiten':'Seite'}`].filter(Boolean);
+  showMetaInfo(cfg.ai&&text.trim().length>20?'KI prüft im Hintergrund …':'');
   refreshName();nav('vMeta');
+  if(cfg.ai&&text.trim().length>20)aiRefine(meta,text);
+}
+function showMetaInfo(extra){if(meta)$('#mtInfo').textContent=[...(meta.info||[]),extra].filter(Boolean).join(' · ')}
+// KI läuft im Hintergrund und ergänzt nur Felder, die du noch nicht selbst geändert hast
+async function aiRefine(m,text){
+  try{
+    const j=await aiAnalyze(text,folderList(),p=>{if(meta===m)showMetaInfo(`KI-Modell lädt … ${Math.round((p||0)*100)} %`)});
+    if(meta!==m||view!=='vMeta')return; // inzwischen gespeichert oder verlassen
+    const set=(id,v)=>{if(v&&!m.touched[id]){$('#'+id).value=v;return true}return false};
+    const s=String(j.absender||'').trim().replace(/\s+(GmbH|AG|SE|KG|e\.\s?V\.|mbH|UG)(\s.*)?$/i,'');
+    let changed=0;
+    if(s&&s.length<60)changed+=set('mtSender',s);
+    const t=String(j.typ||'').trim();if(t&&t.length<40)changed+=set('mtType',t);
+    if(/^\d{4}-\d{2}-\d{2}$/.test(j.datum||'')&&cfg.dateSrc!=='scan'){const d=new Date(j.datum);if(d>new Date(1990,0,1)&&d<new Date(Date.now()+60*864e5))changed+=set('mtDate',j.datum)}
+    const b=String(j.betreff||'').trim().split(/\s+/).slice(0,4).join(' ');if(b)changed+=set('mtSubject',b);
+    let f=folderList().find(x=>x.toLowerCase()===String(j.ordner||'').trim().toLowerCase());
+    const key=$('#mtSender').value.trim().toLowerCase();if(key&&learn[key])f=learn[key];
+    if(f&&!m.touched.mtFolder&&$('#mtFolder').value!=='__new'){folderOptions(f);m.suggested=f;changed++}
+    refreshName();showMetaInfo(changed?'von der KI ergänzt ✓':'KI: keine Änderungen');
+  }catch(e){
+    const msg=errMsg(e);log('KI-Fehler Details: '+msg+(e&&e.stack?' | '+String(e.stack).split('\n').slice(0,3).join(' / '):''));
+    let note='KI nicht verfügbar – Regeln verwendet';
+    if(/mapAsync|Instance reference|device (was )?lost|DeviceLost|out of memory|OOM|GPU/i.test(msg)){
+      aiEngine=null;aiModelId='';const down={big:'std',std:'small'}[cfg.aiModel];
+      if(down){cfg.aiModel=down;save('cfg',cfg);note=`KI-Modell war zu groß für das Handy – ab jetzt „${down==='std'?'Standard':'Klein'}“`}
+    }
+    if(meta===m)showMetaInfo(note);toast(note+' ('+msg.slice(0,90)+')','err');
+  }
 }
 
 /* ---------- Papierformat schätzen ---------- */
@@ -742,12 +760,20 @@ async function getAI(onProgress){
   })();
   try{return await aiLoading}finally{aiLoading=null}
 }
+// Nur das Aussagekräftige an die KI: Briefkopf (Anfang) + Zeilen mit Schlüsselwörtern – kürzer = deutlich schneller
+function compactText(text){
+  const lines=text.replace(/[ \t]+/g,' ').split('\n').map(l=>l.trim()).filter(l=>l.length>1);
+  const head=[];let len=0;for(const l of lines){if(len>900)break;head.push(l);len+=l.length+1}
+  const key=/(rechnung|betreff|bescheid|vertrag|mahnung|bescheinigung|kündigung|einladung|elternbrief|liebe eltern|datum|\bvom\b|leistung|behandlung|beitrag|summe|gesamt|€)/i;
+  const extra=lines.slice(head.length).filter(l=>key.test(l)).slice(0,10);
+  return[...head,...(extra.length?['…',...extra]:[])].join('\n').slice(0,1500);
+}
 const AI_SYS='Du ordnest eingescannte deutsche Briefe und Belege für ein privates Archiv ein. Antworte ausschließlich mit einem JSON-Objekt, ohne weiteren Text.';
 const errMsg=e=>e==null?'unbekannter Fehler':typeof e==='string'?e:(e.message||e.reason||(e.toString&&e.toString()!=='[object Object]'?e.toString():'')||(()=>{try{return JSON.stringify(e)}catch{return 'unbekannter Fehler'}})());
-async function aiAnalyze(text,folders){
-  const eng=await getAI(r=>busy('KI-Modell wird geladen … (einmalig, WLAN empfohlen)',r.progress));
-  busy('KI analysiert das Dokument …');const t0=performance.now();
-  const t=text.replace(/[ \t]+/g,' ').replace(/\n{3,}/g,'\n\n').slice(0,2400);
+async function aiAnalyze(text,folders,onProgress){
+  const eng=await getAI(r=>onProgress&&onProgress(r.progress));
+  const t0=performance.now();
+  const t=compactText(text);
   const prompt=`Ordner zur Auswahl: ${folders.join(' | ')}
 
 Dokumenttext (per Texterkennung, kann Fehler enthalten):
@@ -764,9 +790,9 @@ Gib ein JSON-Objekt mit genau diesen Feldern zurück:
 
 Beispiel: {"absender":"Stadtwerke Rosenheim","typ":"Rechnung","datum":"2026-03-14","betreff":"Strom Jahresabrechnung","ordner":"Wohnen"}`;
   const msgs=[{role:'system',content:AI_SYS},{role:'user',content:prompt}];let res;
-  try{res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:180,response_format:{type:'json_object'}})}
+  try{res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:110,response_format:{type:'json_object'}})}
   catch(e){log('KI (JSON-Modus) Fehler: '+errMsg(e)+' – zweiter Versuch ohne JSON-Modus');try{await eng.resetChat()}catch{}
-    res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:180})}
+    res=await eng.chat.completions.create({messages:msgs,temperature:0.1,max_tokens:110})}
   const raw=(res.choices[0].message.content||'').trim();log(`KI (${Math.round(performance.now()-t0)} ms): ${raw.slice(0,240)}`);
   const i=raw.indexOf('{'),j=raw.lastIndexOf('}');if(i<0||j<i)throw new Error('unverständliche Antwort');
   return JSON.parse(raw.slice(i,j+1));
@@ -954,10 +980,10 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden&&view==='vC
 $('#sLogCopy').onclick=async()=>{try{await navigator.clipboard.writeText(`Scan ${VERSION}\n${navigator.userAgent}\n`+LOG.join('\n'));toast('Protokoll kopiert','ok')}catch{toast('Kopieren nicht möglich')}};
 $('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');
   try{const sample='Telekom Deutschland GmbH\nIhre Rechnung für November 2026\nRechnungsdatum 03.11.2026\nKundennummer 123456\nMobilfunk-Vertrag MagentaMobil M\nGesamtbetrag 39,95 € inkl. MwSt.';
-    const t0=performance.now();const j=await aiAnalyze(sample,folderList());unbusy();
+    el.textContent='Modell wird geladen …';const t0=performance.now();const j=await aiAnalyze(sample,folderList(),p=>{el.textContent=`Modell wird geladen … ${Math.round((p||0)*100)} %`});
     el.textContent=`Funktioniert (${((performance.now()-t0)/1000).toFixed(1)} s inkl. Laden): ${[j.datum,j.typ,j.absender,j.betreff,'→ '+j.ordner].filter(Boolean).join(' · ')}`;
     if(!cfg.ai){$('#sAi').checked=true;readSettings()}}
-  catch(e){unbusy();el.textContent='Nicht möglich: '+errMsg(e);log('KI-Test: '+errMsg(e))}};
+  catch(e){const msg=errMsg(e);if(/mapAsync|Instance reference|device (was )?lost|out of memory|GPU/i.test(msg)){aiEngine=null;aiModelId=''}el.textContent='Nicht möglich: '+msg+(/mapAsync|Instance reference|lost|memory/i.test(msg)?' – bitte ein kleineres Modell wählen.':'');log('KI-Test: '+msg)}};
 $('#sLogClear').onclick=()=>{LOG.length=0;save('log',LOG);$('#sLog').textContent=''};
 $('#btnGallery').onclick=()=>{$('#fGal').click()};
 $('#btnSync').onclick=()=>syncAll(true);
@@ -981,8 +1007,8 @@ $('#pgAdd').onclick=openCam;
 $('#pgAddGal').onclick=()=>$('#fGal').click();
 $('#pgDone').onclick=runAnalysis;
 $('#mtBack').onclick=()=>{renderPages();nav('vPages')};
-['mtDate','mtType','mtSender','mtSubject'].forEach(id=>$('#'+id).addEventListener('input',refreshName));
-$('#mtFolder').onchange=()=>{const n=$('#mtFolder').value==='__new';$('#mtNewFolder').hidden=!n;if(n)$('#mtNewFolder').focus();refreshName()};
+['mtDate','mtType','mtSender','mtSubject'].forEach(id=>$('#'+id).addEventListener('input',()=>{if(meta)meta.touched[id]=true;refreshName()}));
+$('#mtFolder').onchange=()=>{if(meta)meta.touched.mtFolder=true;const n=$('#mtFolder').value==='__new';$('#mtNewFolder').hidden=!n;if(n)$('#mtNewFolder').focus();refreshName()};
 $('#mtNewFolder').oninput=refreshName;
 $('#mtName').oninput=()=>{meta.nameEdited=true};
 $('#mtSave').onclick=saveDoc;
