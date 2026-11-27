@@ -279,7 +279,8 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     </select>
     <p class="hint">Der Dokumenttext verlässt das Gerät nicht. Aus dem Internet wird nur einmalig das Modell geladen (von Hugging Face), danach läuft die KI offline. Braucht ein Handy mit WebGPU-fähiger Grafik.</p>
     <p id="sAiInfo" class="mute" style="font-size:14px;margin:8px 0 0"></p>
-    <div class="row"><button id="sAiTest">Modell herunterladen und testen</button></div>
+    <div class="row"><button id="sAiTest">Modell herunterladen und testen</button><button id="sAiClear">KI-Modelle vom Handy löschen</button></div>
+    <p id="sAiDiag" class="mute" style="font-size:14px;margin:8px 0 0"></p>
     <p class="hint">Beim ersten Mal: im WLAN, App geöffnet lassen, bis „Funktioniert“ erscheint. Das Display bleibt dabei an.</p>
 
     <h2>Benennung und Ordner</h2>
@@ -343,7 +344,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27l';
+const VERSION='2026-11-27m';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -978,7 +979,7 @@ function openSettings(){
   $('#sClient').value=cfg.clientId;$('#sTenant').value=cfg.tenant;$('#sRedirect').textContent=redirectUri();$('#sBase').value=cfg.base;
   $('#sAuto').checked=cfg.autoUpload;$('#sDrop').checked=cfg.dropLocal;$('#sFormat').value=cfg.format;$('#sReview').checked=cfg.review;
   $('#sQual').value=cfg.quality;$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';$('#sPattern').value=cfg.pattern;$('#sDateSrc').value=cfg.dateSrc;$('#sCats').value=cfg.cats;
-  $('#sAi').checked=cfg.ai;$('#sAiModel').value=cfg.aiModel;aiStatus();$('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
+  $('#sAi').checked=cfg.ai;$('#sAiModel').value=cfg.aiModel;aiStatus();showAiDiag();$('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
   (async()=>{try{const e=await navigator.storage.estimate();const n=(await allDocs()).length;$('#sStore').textContent=`${n} Scans, ca. ${(e.usage/1048576).toFixed(1)} MB belegt (inkl. Texterkennungs- und Bildverarbeitungsdaten).`}catch{$('#sStore').textContent=''}})();
   nav('vSet');
 }
@@ -994,6 +995,22 @@ function aiProgressText(t){t=String(t||'');const mb=/(\d+)MB fetched/.exec(t),se
   if(/Loading model from cache/i.test(t))return 'Modell wird aus dem Handy-Speicher gestartet …';
   if(mb)return `${mb[1]} MB geladen${part?`, Teil ${part[1]} von ${part[2]}`:''}${sec?`, seit ${sec[1]} s`:''}`;
   return t.slice(0,90)||'Modell wird vorbereitet …'}
+const fmtGB=b=>(b/1073741824).toFixed(b>1e9?1:2).replace('.',',')+' GB';
+async function aiStorage(){try{const e=await navigator.storage.estimate();let ai=0;
+  for(const k of await caches.keys())if(/^webllm/.test(k)){const c=await caches.open(k);for(const r of await c.keys()){const m=await c.match(r);const l=+(m&&m.headers.get('content-length')||0);ai+=l}}
+  return{used:e.usage||0,quota:e.quota||0,ai}}catch{return null}}
+async function showAiDiag(){const st=await aiStorage();if(st)$('#sAiDiag').textContent=`Speicher der App: ${fmtGB(st.used)} belegt (davon KI-Modelle ca. ${fmtGB(st.ai)}), frei für die App: ${fmtGB(Math.max(0,st.quota-st.used))}`}
+// Vor dem Download prüfen: genug Speicher? Hugging Face erreichbar?
+async function aiPreflight(el){
+  const need={small:0.45,std:1.2,big:2.2}[cfg.aiModel]*1073741824,st=await aiStorage();
+  if(st&&st.quota&&st.quota-st.used<need){el.textContent=`Zu wenig Speicher für die App: frei ${fmtGB(st.quota-st.used)}, nötig ca. ${fmtGB(need)}. Bitte „KI-Modelle vom Handy löschen“ tippen oder Platz auf dem Handy schaffen.`;log('KI: zu wenig Speicher');return false}
+  el.textContent='Verbindung zu Hugging Face wird geprüft …';const id=`${AI_MODELS[cfg.aiModel]}-q4f16_1-MLC`,t0=performance.now();
+  try{const ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),15000);
+    const r=await fetch(`https://huggingface.co/mlc-ai/${id}/resolve/main/ndarray-cache.json`,{signal:ctl.signal,cache:'no-store'});clearTimeout(to);
+    if(!r.ok)throw new Error('HTTP '+r.status);await r.json();log(`Hugging Face erreichbar (${Math.round(performance.now()-t0)} ms)`);return true}
+  catch(e){const msg=errMsg(e);log('Hugging Face nicht erreichbar: '+msg);
+    el.textContent=`Hugging Face ist von diesem Handy aus nicht erreichbar (${/abort/i.test(msg)?'keine Antwort nach 15 s':msg}). Häufige Ursachen: Werbeblocker, „Privates DNS“ in den Android-Einstellungen oder ein gefiltertes WLAN.`;return false}
+}
 function openOneDriveApp(url){
   // Microsoft bietet keinen Link direkt zu einer Datei in der App – wir starten die App (Dateien-Ansicht); ohne App: Web
   if(/Android/i.test(navigator.userAgent))location.href=`intent://files#Intent;scheme=ms-onedrive;package=com.microsoft.skydrive;S.browser_fallback_url=${encodeURIComponent(url)};end`;
@@ -1010,7 +1027,7 @@ $('#camTorch').onclick=async()=>{if(!track)return;torchOn=!torchOn;try{await tra
 document.addEventListener('visibilitychange',()=>{if(document.hidden&&view==='vCam')camBack()});
 $('#sLogCopy').onclick=async()=>{try{await navigator.clipboard.writeText(`Scan ${VERSION}\n${navigator.userAgent}\n`+LOG.join('\n'));toast('Protokoll kopiert','ok')}catch{toast('Kopieren nicht möglich')}};
 $('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');let wl=null;try{wl=await navigator.wakeLock.request('screen')}catch{}
-  try{const sample='Telekom Deutschland GmbH\nIhre Rechnung für November 2026\nRechnungsdatum 03.11.2026\nKundennummer 123456\nMobilfunk-Vertrag MagentaMobil M\nGesamtbetrag 39,95 € inkl. MwSt.';
+  try{if(!(await aiPreflight(el)))return;const sample='Telekom Deutschland GmbH\nIhre Rechnung für November 2026\nRechnungsdatum 03.11.2026\nKundennummer 123456\nMobilfunk-Vertrag MagentaMobil M\nGesamtbetrag 39,95 € inkl. MwSt.';
     el.textContent='Modell wird geladen …';const t0=performance.now();const j=await aiAnalyze(sample,folderList(),(p,t)=>{el.textContent=/neuer Versuch/.test(t||'')?t:`${Math.round((p||0)*100)} % – ${aiProgressText(t)}`},true);
     el.textContent=`Funktioniert (${((performance.now()-t0)/1000).toFixed(1)} s inkl. Laden): ${[j.datum,j.typ,j.absender,j.betreff,'→ '+j.ordner].filter(Boolean).join(' · ')}`;
     if(!cfg.ai){$('#sAi').checked=true;readSettings()}}
@@ -1046,6 +1063,10 @@ $('#mtName').oninput=()=>{meta.nameEdited=true};
 $('#mtSave').onclick=saveDoc;
 $('#setBack').onclick=closeSettings;
 document.querySelectorAll('#vSet input,#vSet select,#vSet textarea').forEach(el=>el.addEventListener('change',readSettings));
+$('#sAiClear').onclick=async()=>{if(!confirm('Alle heruntergeladenen KI-Modelle vom Handy löschen? (Sie können jederzeit neu geladen werden.)'))return;aiCancel();try{if(aiEngine){await aiEngine.unload().catch(()=>{})}}catch{}aiEngine=null;aiModelId='';
+  for(const k of await caches.keys())if(/^webllm/.test(k))await caches.delete(k);
+  try{for(const d of (await indexedDB.databases?.())||[])if(/^webllm/.test(d.name||''))indexedDB.deleteDatabase(d.name)}catch{}
+  log('KI-Modelle gelöscht');$('#sAiInfo').textContent='KI-Modelle gelöscht.';showAiDiag()};
 $('#sAiModel').addEventListener('change',()=>{if(aiLoading){aiCancel();$('#sAiInfo').textContent='Vorheriger Download abgebrochen – jetzt „Modell herunterladen und testen“ tippen.'}});
 $('#sQual').oninput=()=>{$('#sQualV').textContent=Math.round($('#sQual').value*100)+' %'};
 $('#sLogin').onclick=()=>{readSettings();login()};
