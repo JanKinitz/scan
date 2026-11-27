@@ -780,7 +780,8 @@ async function getAI(onProgress,allowDownload){
         }
         log(`KI-Modell bereit nach ${Math.round((performance.now()-t0)/1000)} s`);
         aiEngine=eng;aiModelId=id;return eng;
-      })().finally(()=>{aiLoading=null;aiLast=null;aiLoggedPct=-1;setTimeout(applyUpdate,500)});
+      })();
+      const mine=aiLoading;mine.finally(()=>{if(aiLoading===mine){aiLoading=null;aiLast=null;aiLoggedPct=-1}setTimeout(applyUpdate,500)}).catch(()=>{});
     }
     return await aiLoading;
   }finally{if(onProgress)aiSubs.delete(onProgress)}
