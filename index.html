@@ -344,7 +344,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27m';
+const VERSION='2026-11-27n';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -762,7 +762,8 @@ async function getAI(onProgress,allowDownload){
     if(aiEngine&&aiModelId===id)return aiEngine;
     if(!aiLoading){
       const webllm=await import(WEBLLM_URL);
-      if(!allowDownload&&!(await webllm.hasModelInCache(id).catch(()=>false))){const e=new Error('NOT_CACHED');e.notCached=true;throw e}
+      const appConfig={...webllm.prebuiltAppConfig,useIndexedDBCache:true}; // IndexedDB statt Cache API – Cache.add hängt auf Android bei Hugging-Face-Dateien
+      if(!allowDownload&&!(await webllm.hasModelInCache(id,appConfig).catch(()=>false))){const e=new Error('NOT_CACHED');e.notCached=true;throw e}
       aiLoading=(async()=>{
         if(aiEngine){try{await aiEngine.unload()}catch{}aiEngine=null}
         log(`KI-Modell ${id} wird geladen (GPU: ${g.name||'?'})`);const t0=performance.now();
@@ -771,11 +772,13 @@ async function getAI(onProgress,allowDownload){
         for(let attempt=1;!eng;attempt++){
           const w=new Worker('llm-worker.js?v='+VERSION,{type:'module'});aiWorker=w;
           const cancelled=new Promise((_,rej)=>{aiAbort=rej});
-          try{eng=await Promise.race([cancelled,webllm.CreateWebWorkerMLCEngine(w,id,{initProgressCallback:r=>{
+          let lastTick=Date.now(),lastP=-1;const wd=setInterval(()=>{const p=aiLast?aiLast.progress:0;if(p!==lastP){lastP=p;lastTick=Date.now()}
+            else if(Date.now()-lastTick>90000&&aiAbort){aiAbort(new Error('Download hängt – keine Daten seit 90 s'))}},5000);
+          try{eng=await Promise.race([cancelled,webllm.CreateWebWorkerMLCEngine(w,id,{appConfig,initProgressCallback:r=>{
             aiLast=r;const pct=Math.floor((r.progress||0)*10)*10;if(pct!==aiLoggedPct){aiLoggedPct=pct;log(`KI lädt ${pct} %: ${String(r.text||'').slice(0,80)}`)}
-            aiSubs.forEach(f=>{try{f(r)}catch{}})}})])}
-          catch(e){try{w.terminate()}catch{}const msg=errMsg(e);log(`KI-Laden Versuch ${attempt}: ${msg}`);
-            if(msg==='abgebrochen'||attempt>=4||!/network|fetch|Cache|Failed to fetch|aborted/i.test(msg))throw e;
+            aiSubs.forEach(f=>{try{f(r)}catch{}})}})]);clearInterval(wd)}
+          catch(e){clearInterval(wd);try{w.terminate()}catch{}const msg=errMsg(e);log(`KI-Laden Versuch ${attempt}: ${msg}`);
+            if(msg==='abgebrochen'||attempt>=4||!/network|fetch|Cache|Failed to fetch|aborted|hängt/i.test(msg))throw e;
             aiSubs.forEach(f=>{try{f({progress:aiLast?aiLast.progress:0,text:`Verbindung unterbrochen – neuer Versuch ${attempt+1} …`})}catch{}});
             await sleep(3000)}
         }
