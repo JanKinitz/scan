@@ -281,6 +281,10 @@ dialog .acts{display:grid;gap:8px;margin-top:14px}
     <p class="hint">Gesendet wird nur der gekürzte, geschwärzte Text – kein Bild. Er geht über deine eigene Azure-Funktion an dein eigenes Azure-OpenAI-Modell in Schweden (EU); Microsoft nutzt ihn laut eigener Zusage nicht zum Training und speichert ihn nicht dauerhaft. Ohne Netz oder bei Fehlern nimmt die App die Regeln.</p>
     <p id="sAiInfo" class="mute" style="font-size:14px;margin:8px 0 0;overflow-wrap:anywhere"></p>
     <div class="row"><button id="sAiTest">Verbindung testen</button><button id="sAiPreview">Was sieht die KI?</button></div>
+    <h3 style="margin:18px 0 4px;font-size:16px">Kosten</h3>
+    <p id="sCost" class="mute" style="font-size:14px;margin:4px 0 0;white-space:pre-line"></p>
+    <p class="hint">Echte Azure-Abrechnung für alles rund um die KI (Modell, Funktion, Speicher). Azure liefert die Kosten mit 8–24 Stunden Verzögerung; die Zahl der KI-Analysen zählt Azure fast sofort.</p>
+    <div class="row"><button id="sCostBtn">Kosten aktualisieren</button></div>
 
     <h2>Benennung und Ordner</h2>
     <label for="sPattern">Muster für den Dateinamen</label>
@@ -344,7 +348,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27t';
+const VERSION='2026-11-27u';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -947,6 +951,7 @@ function openSettings(){
   $('#sQual').value=cfg.quality;$('#sQualV').textContent=Math.round(cfg.quality*100)+' %';$('#sPattern').value=cfg.pattern;$('#sDateSrc').value=cfg.dateSrc;$('#sCats').value=cfg.cats;
   $('#sAi').checked=cfg.ai;$('#sAiModel').innerHTML=Object.entries(AI_MODELS).map(([v,l])=>`<option value="${v}">${l}</option>`).join('');$('#sAiModel').value=cfg.aiModel;$('#sAiUrl').value=cfg.aiUrl||'';$('#sRedact').checked=cfg.redact;$('#sRedactNames').value=cfg.redactNames||'';aiStatus();$('#sLearnN').textContent=Object.keys(learn).length;renderOd();$('#sVer').textContent=VERSION;$('#sLog').textContent=LOG.slice().reverse().join('\n')||'(leer)';
   (async()=>{try{const e=await navigator.storage.estimate();const n=(await allDocs()).length;$('#sStore').textContent=`${n} Scans, ca. ${(e.usage/1048576).toFixed(1)} MB belegt (inkl. Texterkennungs- und Bildverarbeitungsdaten).`}catch{$('#sStore').textContent=''}})();
+  if(cfg.ai&&cfg.aiUrl)loadCosts();else $('#sCost').textContent='KI ist ausgeschaltet.';
   nav('vSet');
 }
 function readSettings(){
@@ -977,6 +982,18 @@ $('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');el.textCon
     if(!cfg.ai){$('#sAi').checked=true;readSettings()}}
   catch(e){const msg=errMsg(e);log('KI-Test: '+msg);el.textContent='Nicht möglich: '+msg}};
 $('#sAiPreview').onclick=()=>{const t=pages.length?pages.map(p=>p.text||'').join('\n'):'Praxis für Osteopathie\nJonas Vogt\nHerrn\nJan Muster\nHauptstr. 1\n12345 Ort\nRechnung Nr. R26-453\nIBAN DE47 7115 0000 0020 1040 63\nTel. 08051 967 9339\nkontakt@praxis.de';$('#sAiInfo').textContent='So sieht die KI den Text:\n'+redact(compactText(t));$('#sAiInfo').style.whiteSpace='pre-wrap'};
+async function loadCosts(){const el=$('#sCost');if(!cfg.aiUrl){el.textContent='';return}el.textContent='Wird geladen …';
+  try{const token=await getToken();const r=await fetch(cfg.aiUrl.replace(/\/analyze\/?$/,'/costs'),{headers:{Authorization:'Bearer '+token}});
+    const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('HTTP '+r.status));
+    const cur=j.currency||'EUR',money=v=>v.toLocaleString('de-DE',{style:'currency',currency:cur,minimumFractionDigits:2,maximumFractionDigits:v<1&&v>0?4:2});
+    const de=d=>d?d.split('-').reverse().join('.'):'';
+    const line=(lbl,x)=>{const avg=x.billedRequests?x.cost/x.billedRequests:0;
+      return `${lbl}: ${money(x.cost)} · ${x.requests} KI-Analyse${x.requests===1?'':'n'}`+(x.billedRequests&&x.cost>0?` · Ø ${(avg*100).toLocaleString('de-DE',{maximumFractionDigits:3})} ct pro Scan`:'')};
+    const out=[line('Diesen Monat',j.month),line('Seit '+de(j.since),j.total)];
+    out.push(j.lastCostDay?`Abgerechnet bis ${de(j.lastCostDay)}`+(j.total.requests>j.total.billedRequests?` – Kosten für ${j.total.requests-j.total.billedRequests} neuere Analysen folgen.`:'.'):'Noch keine Abrechnungsdaten – Azure liefert sie mit 8–24 Stunden Verzögerung.');
+    el.textContent=out.join('\n')}
+  catch(e){const m=errMsg(e);log('Kosten: '+m);el.textContent='Kosten nicht abrufbar: '+m}}
+$('#sCostBtn').onclick=loadCosts;
 $('#sLogClear').onclick=()=>{LOG.length=0;save('log',LOG);$('#sLog').textContent=''};
 $('#btnGallery').onclick=()=>{$('#fGal').click()};
 $('#btnSync').onclick=()=>syncAll(true);

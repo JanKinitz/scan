@@ -4,33 +4,13 @@
 // - Es wird nichts gespeichert und kein Dokumenttext protokolliert
 // Anwendungseinstellungen: ALLOWED_USERS, AOAI_ENDPOINT (https://<name>.openai.azure.com), AOAI_DEPLOYMENT
 
-let cached = null; // { token, exp }
-
-async function aoaiToken() {
-  if (cached && cached.exp - 300 > Date.now() / 1000) return cached.token;
-  const ep = process.env.IDENTITY_ENDPOINT, hdr = process.env.IDENTITY_HEADER;
-  if (!ep || !hdr) throw new Error('Verwaltete Identität der Azure-Funktion ist nicht eingeschaltet');
-  const r = await fetch(`${ep}?resource=${encodeURIComponent('https://cognitiveservices.azure.com')}&api-version=2019-08-01`, { headers: { 'X-IDENTITY-HEADER': hdr } });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok || !j.access_token) throw new Error('Kein Zugriffstoken für Azure OpenAI (' + r.status + ')');
-  cached = { token: j.access_token, exp: Number(j.expires_on) || (Date.now() / 1000 + 600) };
-  return cached.token;
-}
+const { msiToken, checkUser, sender } = require('../lib/common');
 
 module.exports = async function (context, req) {
-  const send = (status, body) => { context.res = { status, headers: { 'Content-Type': 'application/json' }, body }; };
+  const send = sender(context);
   try {
-    const auth = req.headers['authorization'] || '';
-    if (!/^Bearer\s+\S+/.test(auth)) return send(401, { error: 'Anmeldung fehlt' });
-
-    const me = await fetch('https://graph.microsoft.com/v1.0/me?$select=id,userPrincipalName,mail', { headers: { Authorization: auth } });
-    if (!me.ok) return send(401, { error: 'Microsoft-Anmeldung ungültig oder abgelaufen' });
-    const u = await me.json();
-    const who = [u.id, u.userPrincipalName, u.mail].filter(Boolean).map(s => String(s).toLowerCase());
-    const allowed = String(process.env.ALLOWED_USERS || '').toLowerCase().split(/[\s,;]+/).filter(Boolean);
-    if (!allowed.some(a => who.includes(a))) {
-      return send(403, { error: `Konto nicht freigegeben. In der Azure-Funktion unter ALLOWED_USERS eintragen: ${u.userPrincipalName || u.mail || u.id}` });
-    }
+    const denied = await checkUser(req);
+    if (denied) return send(denied[0], { error: denied[1] });
     const endpoint = String(process.env.AOAI_ENDPOINT || '').replace(/\/+$/, '');
     const deployment = process.env.AOAI_DEPLOYMENT;
     if (!endpoint || !deployment) return send(500, { error: 'AOAI_ENDPOINT oder AOAI_DEPLOYMENT ist in der Azure-Funktion nicht eingetragen' });
@@ -39,7 +19,7 @@ module.exports = async function (context, req) {
     const messages = Array.isArray(b.messages) ? b.messages.slice(0, 4).map(m => ({ role: m.role === 'system' ? 'system' : 'user', content: String(m.content || '').slice(0, 8000) })) : null;
     if (!messages || !messages.length) return send(400, { error: 'Keine Nachricht' });
 
-    const token = await aoaiToken();
+    const token = await msiToken('https://cognitiveservices.azure.com');
     const call = (extra) => fetch(`${endpoint}/openai/v1/chat/completions`, {
       method: 'POST',
       headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
