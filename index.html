@@ -343,7 +343,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const today=()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`};
 
 /* ---------- UI-Helfer ---------- */
-const VERSION='2026-11-27k';
+const VERSION='2026-11-27l';
 const LOG=load('log',[]);
 function log(m){const s=new Date().toLocaleTimeString('de-DE')+' '+m;LOG.push(s);while(LOG.length>100)LOG.shift();save('log',LOG);console.log('[Scan]',s)}
 addEventListener('error',e=>{log(`Fehler: ${e.message} (${String(e.filename||'').split('/').pop()}:${e.lineno})`);unbusy();toast('Fehler: '+e.message,'err')});
@@ -750,7 +750,9 @@ async function gpuInfo(){
   if(!ad)return{ok:false,why:'Keine geeignete Grafikeinheit gefunden – KI auf dem Gerät ist hier nicht möglich.'};
   const i=ad.info||{};return{ok:true,f16:ad.features.has('shader-f16'),name:[i.vendor,i.architecture,i.device].filter(Boolean).join(' '),maxBuf:ad.limits.maxBufferSize};
 }
-const aiSubs=new Set();let aiLast=null,aiLoggedPct=-1;
+const aiSubs=new Set();let aiLast=null,aiLoggedPct=-1,aiWorker=null,aiAbort=null;
+// laufendes Laden abbrechen (z. B. bei Modellwechsel)
+function aiCancel(){if(!aiLoading)return;log('KI-Laden abgebrochen');try{aiWorker&&aiWorker.terminate()}catch{}aiWorker=null;if(aiAbort)aiAbort(new Error('abgebrochen'));aiLoading=null;aiLast=null;aiLoggedPct=-1}
 async function getAI(onProgress,allowDownload){
   if(onProgress){aiSubs.add(onProgress);if(aiLast)onProgress(aiLast)} // jeder Wartende bekommt den Fortschritt
   try{
@@ -766,12 +768,13 @@ async function getAI(onProgress,allowDownload){
         let eng=null;
         // Download bricht auf dem Handy gelegentlich ab – bereits geladene Teile bleiben im Speicher, also einfach erneut versuchen
         for(let attempt=1;!eng;attempt++){
-          const w=new Worker('llm-worker.js?v='+VERSION,{type:'module'});
-          try{eng=await webllm.CreateWebWorkerMLCEngine(w,id,{initProgressCallback:r=>{
+          const w=new Worker('llm-worker.js?v='+VERSION,{type:'module'});aiWorker=w;
+          const cancelled=new Promise((_,rej)=>{aiAbort=rej});
+          try{eng=await Promise.race([cancelled,webllm.CreateWebWorkerMLCEngine(w,id,{initProgressCallback:r=>{
             aiLast=r;const pct=Math.floor((r.progress||0)*10)*10;if(pct!==aiLoggedPct){aiLoggedPct=pct;log(`KI lädt ${pct} %: ${String(r.text||'').slice(0,80)}`)}
-            aiSubs.forEach(f=>{try{f(r)}catch{}})}})}
+            aiSubs.forEach(f=>{try{f(r)}catch{}})}})])}
           catch(e){try{w.terminate()}catch{}const msg=errMsg(e);log(`KI-Laden Versuch ${attempt}: ${msg}`);
-            if(attempt>=4||!/network|fetch|Cache|Failed to fetch|aborted/i.test(msg))throw e;
+            if(msg==='abgebrochen'||attempt>=4||!/network|fetch|Cache|Failed to fetch|aborted/i.test(msg))throw e;
             aiSubs.forEach(f=>{try{f({progress:aiLast?aiLast.progress:0,text:`Verbindung unterbrochen – neuer Versuch ${attempt+1} …`})}catch{}});
             await sleep(3000)}
         }
@@ -985,6 +988,11 @@ function readSettings(){
 }
 async function aiStatus(){const el=$('#sAiInfo');const g=await gpuInfo();
   el.textContent=g.ok?`Grafik: ${g.name||'WebGPU verfügbar'}${g.f16?'':' (ohne 16-Bit-Unterstützung, etwas langsamer)'}${aiModelId?` · geladen: ${aiModelId}`:''}`:g.why}
+// WebLLM meldet z. B. „Fetching param cache[12/38]: 310MB fetched. 23% completed, 41 secs elapsed.“
+function aiProgressText(t){t=String(t||'');const mb=/(\d+)MB fetched/.exec(t),sec=/(\d+) secs? elapsed/.exec(t),part=/\[(\d+)\/(\d+)\]/.exec(t);
+  if(/Loading model from cache/i.test(t))return 'Modell wird aus dem Handy-Speicher gestartet …';
+  if(mb)return `${mb[1]} MB geladen${part?`, Teil ${part[1]} von ${part[2]}`:''}${sec?`, seit ${sec[1]} s`:''}`;
+  return t.slice(0,90)||'Modell wird vorbereitet …'}
 function openOneDriveApp(url){
   // Microsoft bietet keinen Link direkt zu einer Datei in der App – wir starten die App (Dateien-Ansicht); ohne App: Web
   if(/Android/i.test(navigator.userAgent))location.href=`intent://files#Intent;scheme=ms-onedrive;package=com.microsoft.skydrive;S.browser_fallback_url=${encodeURIComponent(url)};end`;
@@ -1002,7 +1010,7 @@ document.addEventListener('visibilitychange',()=>{if(document.hidden&&view==='vC
 $('#sLogCopy').onclick=async()=>{try{await navigator.clipboard.writeText(`Scan ${VERSION}\n${navigator.userAgent}\n`+LOG.join('\n'));toast('Protokoll kopiert','ok')}catch{toast('Kopieren nicht möglich')}};
 $('#sAiTest').onclick=async()=>{readSettings();const el=$('#sAiInfo');let wl=null;try{wl=await navigator.wakeLock.request('screen')}catch{}
   try{const sample='Telekom Deutschland GmbH\nIhre Rechnung für November 2026\nRechnungsdatum 03.11.2026\nKundennummer 123456\nMobilfunk-Vertrag MagentaMobil M\nGesamtbetrag 39,95 € inkl. MwSt.';
-    el.textContent='Modell wird geladen …';const t0=performance.now();const j=await aiAnalyze(sample,folderList(),(p,t)=>{el.textContent=/neuer Versuch/.test(t||'')?t:`Modell wird geladen … ${Math.round((p||0)*100)} %`},true);
+    el.textContent='Modell wird geladen …';const t0=performance.now();const j=await aiAnalyze(sample,folderList(),(p,t)=>{el.textContent=/neuer Versuch/.test(t||'')?t:`${Math.round((p||0)*100)} % – ${aiProgressText(t)}`},true);
     el.textContent=`Funktioniert (${((performance.now()-t0)/1000).toFixed(1)} s inkl. Laden): ${[j.datum,j.typ,j.absender,j.betreff,'→ '+j.ordner].filter(Boolean).join(' · ')}`;
     if(!cfg.ai){$('#sAi').checked=true;readSettings()}}
   catch(e){const msg=errMsg(e);if(/mapAsync|Instance reference|device (was )?lost|out of memory|GPU/i.test(msg)){aiEngine=null;aiModelId=''}el.textContent='Nicht möglich: '+msg+(/mapAsync|Instance reference|lost|memory/i.test(msg)?' – bitte ein kleineres Modell wählen.':/network|Cache|fetch/i.test(msg)?' – Verbindung prüfen und erneut tippen; bereits geladene Teile bleiben erhalten.':'');log('KI-Test: '+msg)}
@@ -1037,6 +1045,7 @@ $('#mtName').oninput=()=>{meta.nameEdited=true};
 $('#mtSave').onclick=saveDoc;
 $('#setBack').onclick=closeSettings;
 document.querySelectorAll('#vSet input,#vSet select,#vSet textarea').forEach(el=>el.addEventListener('change',readSettings));
+$('#sAiModel').addEventListener('change',()=>{if(aiLoading){aiCancel();$('#sAiInfo').textContent='Vorheriger Download abgebrochen – jetzt „Modell herunterladen und testen“ tippen.'}});
 $('#sQual').oninput=()=>{$('#sQualV').textContent=Math.round($('#sQual').value*100)+' %'};
 $('#sLogin').onclick=()=>{readSettings();login()};
 $('#sLogout').onclick=logout;
